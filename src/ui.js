@@ -184,6 +184,7 @@ function buildApiSettingsSectionHtml(settings = getSettings()) {
                     <option value="openrouter" ${settings.apiType === 'openrouter' ? 'selected' : ''}>${t`OpenRouter (chat/completions)`}</option>
                     <option value="electronhub" ${settings.apiType === 'electronhub' ? 'selected' : ''}>${t`Electron Hub (/v1/images/*)`}</option>
                     <option value="naistera" ${settings.apiType === 'naistera' ? 'selected' : ''}>${t`Naistera (naistera.org)`}</option>
+                    <option value="void" ${settings.apiType === 'void' ? 'selected' : ''}>${t`VoidAI / RouteMyAI (chat-completions)`}</option>
                     <option value="novelai" ${settings.apiType === 'novelai' ? 'selected' : ''}>${t`NovelAI (via ST proxy)`}</option>
                 </select>
                 <div></div>
@@ -212,10 +213,10 @@ function buildApiSettingsSectionHtml(settings = getSettings()) {
 
             <div class="flex-row ${settings.apiType === 'naistera' || settings.apiType === 'novelai' ? 'iig-hidden' : ''}" id="iig_model_row">
                 <label for="iig_model_select">${t`Model`}</label>
+                <input type="text" id="iig_model" class="text_pole flex1" value="${sanitizeForHtml(settings.model || '')}" placeholder="${t`Enter model name`}">
                 <select id="iig_model_select" class="flex1 ${settings.rawEndpoint ? 'iig-hidden' : ''}">
                     ${settings.model ? `<option value="${sanitizeForHtml(settings.model)}" selected>${sanitizeForHtml(settings.model)}</option>` : `<option value="" selected disabled>${t`-- Select a model --`}</option>`}
                 </select>
-                <input type="text" id="iig_model" class="text_pole flex1 ${settings.rawEndpoint ? '' : 'iig-hidden'}" value="${sanitizeForHtml(settings.model || '')}" placeholder="${t`Enter model name`}">
                 <div id="iig_refresh_models" class="menu_button iig-refresh-btn" title="${t`Refresh list`}">
                     <i class="fa-solid fa-sync"></i>
                 </div>
@@ -266,7 +267,7 @@ function buildApiSettingsSectionHtml(settings = getSettings()) {
                 <div></div>
             </div>
 
-            <div id="iig_avatar_section" class="iig-settings-card-nested ${settings.apiType !== 'gemini' && settings.apiType !== 'openrouter' ? 'iig-hidden' : ''}">
+            <div id="iig_avatar_section" class="iig-settings-card-nested ${settings.apiType !== 'gemini' && settings.apiType !== 'openrouter' && settings.apiType !== 'void' ? 'iig-hidden' : ''}">
                 <div class="flex-row">
                     <label for="iig_aspect_ratio">${t`Aspect ratio`}</label>
                     <select id="iig_aspect_ratio" class="flex1">
@@ -946,7 +947,8 @@ function buildReferencesSettingsSectionHtml(settings = getSettings()) {
     const isOpenAI = settings.apiType === 'openai';
     const isOpenRouter = settings.apiType === 'openrouter';
     const isElectronHub = settings.apiType === 'electronhub';
-    const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub) && refsSupported;
+    const isVoid = settings.apiType === 'void';
+    const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid) && refsSupported;
     const naisteraRefsVisible = settings.apiType === 'naistera' && refsSupported;
 
     // Заголовок секции аватаров — по активному провайдеру. Provider-brand
@@ -954,6 +956,7 @@ function buildReferencesSettingsSectionHtml(settings = getSettings()) {
     let avatarRefsTitle;
     if (isOpenRouter) avatarRefsTitle = 'OpenRouter';
     else if (isElectronHub) avatarRefsTitle = 'Electron Hub';
+    else if (isVoid) avatarRefsTitle = 'VoidAI / RouteMyAI';
     else if (isOpenAI) avatarRefsTitle = 'OpenAI / GPT Image';
     else avatarRefsTitle = 'Gemini / nano-banana';
 
@@ -1770,18 +1773,10 @@ function bindApiSectionEvents(settings, updateVisibility) {
         saveSettings();
 
         const select = document.getElementById('iig_model_select');
-        const input = document.getElementById('iig_model');
         if (settings.rawEndpoint) {
-            // Raw: скрываем select (его опции неактуальны для произвольного
-            // эндпоинта), показываем свободный input.
             select?.classList.add('iig-hidden');
-            input?.classList.remove('iig-hidden');
         } else {
-            // Обратно в режим provider → показываем select, прячем input,
-            // и автоматически подтягиваем модели, чтобы юзер не жал Refresh
-            // руками.
             select?.classList.remove('iig-hidden');
-            input?.classList.add('iig-hidden');
             reloadModelList({ announce: true });
         }
     });
@@ -2616,6 +2611,7 @@ function buildUpdateVisibility(settings) {
         const isOpenAI = apiType === 'openai';
         const isOpenRouter = apiType === 'openrouter';
         const isElectronHub = apiType === 'electronhub';
+        const isVoid = apiType === 'void';
         const isNovelAI = apiType === 'novelai';
 
         // Поддерживает ли активный провайдер референсы (учитывая модель).
@@ -2627,7 +2623,7 @@ function buildUpdateVisibility(settings) {
         // показывается не только для Gemini, но и для любого OpenAI-семейства,
         // которое поддерживает /edits, и для OpenRouter/Electron Hub. Naistera
         // использует свой отдельный блок.
-        const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub) && refsSupported;
+        const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid) && refsSupported;
 
         // Model is used for OpenAI and Gemini; Naistera and NovelAI have their own selectors.
         document.getElementById('iig_model_row')?.classList.toggle('iig-hidden', isNaistera || isNovelAI);
@@ -2677,11 +2673,9 @@ function buildUpdateVisibility(settings) {
             endpointInput.placeholder = getEndpointPlaceholder(apiType);
         }
 
-        // Aspect + image size — для Gemini и OpenRouter. В OpenAI размер
-        // задаётся другим селектором (#iig_size), в Naistera — своим.
         const avatarSection = document.getElementById('iig_avatar_section');
         if (avatarSection) {
-            avatarSection.classList.toggle('iig-hidden', !(isGemini || isOpenRouter));
+            avatarSection.classList.toggle('iig-hidden', !(isGemini || isOpenRouter || isVoid));
         }
 
         // «Общий» avatar refs блок — для Gemini / OpenAI-c-refs / OpenRouter.
@@ -2694,6 +2688,7 @@ function buildUpdateVisibility(settings) {
             if (titleEl) {
                 if (isOpenRouter) titleEl.textContent = 'OpenRouter';
                 else if (isElectronHub) titleEl.textContent = 'Electron Hub';
+                else if (isVoid) titleEl.textContent = 'VoidAI / RouteMyAI';
                 else if (isOpenAI) titleEl.textContent = 'OpenAI / GPT Image';
                 else titleEl.textContent = 'Gemini / nano-banana';
             }

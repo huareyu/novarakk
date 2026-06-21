@@ -69,7 +69,7 @@ export const defaultSettings = Object.freeze({
     imageContextCount: 1,
     styles: [],
     activeStyleId: '',
-    apiType: 'openai', // 'openai' | 'gemini' | 'openrouter' | 'electronhub' | 'naistera' | 'novelai'
+    apiType: 'openai', // 'openai' | 'gemini' | 'openrouter' | 'electronhub' | 'naistera' | 'void' | 'novelai'
     endpoint: '',
     /**
      * Если true — endpoint используется «как есть» для генерации (никаких
@@ -402,6 +402,7 @@ export const DEFAULT_ENDPOINTS = Object.freeze({
     naistera: 'https://naistera.org',
     openrouter: 'https://openrouter.ai/api/v1',
     electronhub: 'https://api.electronhub.ai',
+    void: 'https://api.voidai.app',
 });
 
 export const ENDPOINT_PLACEHOLDERS = Object.freeze({
@@ -410,6 +411,7 @@ export const ENDPOINT_PLACEHOLDERS = Object.freeze({
     openrouter: 'https://openrouter.ai/api/v1',
     electronhub: 'https://api.electronhub.ai',
     naistera: 'https://naistera.org',
+    void: 'https://api.voidai.app',
 });
 
 // ----- Settings accessors -----
@@ -582,6 +584,7 @@ export function normalizeConfiguredEndpoint(apiType, endpoint) {
     const trimmed = String(endpoint || '').trim().replace(/\/+$/, '');
     if (!trimmed) {
         if (apiType === 'naistera') return DEFAULT_ENDPOINTS.naistera;
+        if (apiType === 'void') return DEFAULT_ENDPOINTS.void;
         if (apiType === 'openrouter') return DEFAULT_ENDPOINTS.openrouter;
         if (apiType === 'electronhub') return DEFAULT_ENDPOINTS.electronhub;
         return '';

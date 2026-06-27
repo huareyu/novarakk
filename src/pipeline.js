@@ -363,6 +363,13 @@ export async function generateImageWithRetry(prompt, style, onStatusUpdate, opti
         throw new Error(t`Unknown API: ${settings.apiType}`);
     }
 
+    if (settings.overrideAspectRatio) {
+        options.aspectRatio = null;
+    }
+    if (settings.overrideImageSize) {
+        options.imageSize = null;
+    }
+
     const maxRetries = settings.maxRetries;
     const baseDelay = settings.retryDelay;
 

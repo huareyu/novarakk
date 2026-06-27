@@ -69,6 +69,7 @@ export const defaultSettings = Object.freeze({
     imageContextCount: 1,
     styles: [],
     activeStyleId: '',
+    styleTags: ['GPT', 'Nano Banana', 'NovelAI'],
     apiType: 'openai', // 'openai' | 'gemini' | 'openrouter' | 'electronhub' | 'naistera' | 'void' | 'novelai'
     endpoint: '',
     /**
@@ -90,7 +91,9 @@ export const defaultSettings = Object.freeze({
     useActiveUserPersonaAvatar: false,
     userAvatarFile: '', // Selected user avatar filename from /User Avatars/
     aspectRatio: '1:1', // "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
+    overrideAspectRatio: false,
     imageSize: '1K', // "1K", "2K", "4K"
+    overrideImageSize: false,
     // Naistera specific
     naisteraAspectRatio: '1:1',
     naisteraModel: 'grok', // 'grok' | 'grok-pro' | 'nano banana 2' | 'novelai'
@@ -195,7 +198,9 @@ export const CONNECTION_FIELDS = Object.freeze([
     'size',
     'quality',
     'aspectRatio',
+    'overrideAspectRatio',
     'imageSize',
+    'overrideImageSize',
     'sendCharAvatar',
     'sendUserAvatar',
     'useActiveUserPersonaAvatar',
@@ -625,6 +630,40 @@ export function getEffectiveEndpoint(settings = getSettings()) {
 
 // ----- Styles -----
 
+export function ensureStyleTags(settings = getSettings()) {
+    if (!Array.isArray(settings.styleTags)) {
+        settings.styleTags = ['GPT', 'Nano Banana', 'NovelAI'];
+    }
+    settings.styleTags = settings.styleTags
+        .map((tag) => String(tag || '').trim())
+        .filter(Boolean);
+    if (settings.styleTags.length === 0) {
+        settings.styleTags = ['GPT', 'Nano Banana', 'NovelAI'];
+    }
+    return settings.styleTags;
+}
+
+export function addStyleTag(tagName, settings = getSettings()) {
+    const tags = ensureStyleTags(settings);
+    const name = String(tagName || '').trim();
+    if (!name) return false;
+    if (tags.some((t2) => t2.toLowerCase() === name.toLowerCase())) return false;
+    tags.push(name);
+    return true;
+}
+
+export function removeStyleTag(tagName, settings = getSettings()) {
+    const tags = ensureStyleTags(settings);
+    const idx = tags.findIndex((t2) => t2 === tagName);
+    if (idx === -1) return false;
+    tags.splice(idx, 1);
+    for (const style of ensureStyles(settings)) {
+        const si = style.tags.indexOf(tagName);
+        if (si !== -1) style.tags.splice(si, 1);
+    }
+    return true;
+}
+
 export function ensureStyles(settings = getSettings()) {
     if (!Array.isArray(settings.styles)) {
         const migratedPresets = Array.isArray(settings.stylePresets) ? settings.stylePresets : [];
@@ -632,6 +671,9 @@ export function ensureStyles(settings = getSettings()) {
             id: String(preset?.id || `iig-style-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
             name: String(preset?.name || '').trim(),
             value: String(preset?.style || '').trim(),
+            favorite: false,
+            createdAt: 0,
+            tags: [],
         }));
     }
 
@@ -639,6 +681,9 @@ export function ensureStyles(settings = getSettings()) {
         id: String(style?.id || `iig-style-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`),
         name: String(style?.name || t`Style ${index + 1}`).trim() || t`Style ${index + 1}`,
         value: String(style?.value ?? style?.style ?? '').trim(),
+        favorite: style?.favorite === true,
+        createdAt: Number.isFinite(style?.createdAt) ? style.createdAt : 0,
+        tags: Array.isArray(style?.tags) ? style.tags.filter((t2) => typeof t2 === 'string' && t2.trim()) : [],
     }));
 
     if (!settings.styles.some((style) => style.id === settings.activeStyleId)) {
@@ -655,9 +700,20 @@ export function createStyle(name = '') {
         id: `iig-style-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         name: String(name || '').trim() || t`Style ${styles.length + 1}`,
         value: '',
+        favorite: false,
+        createdAt: Date.now(),
+        tags: [],
     };
     styles.push(style);
     settings.activeStyleId = style.id;
+    return style;
+}
+
+export function toggleStyleFavorite(styleId) {
+    const settings = getSettings();
+    const style = ensureStyles(settings).find((item) => item.id === styleId);
+    if (!style) return null;
+    style.favorite = !style.favorite;
     return style;
 }
 
@@ -678,6 +734,12 @@ export function updateStyle(styleId, patch) {
     }
     if (Object.hasOwn(patch, 'value')) {
         style.value = String(patch.value || '').trim();
+    }
+    if (Object.hasOwn(patch, 'favorite')) {
+        style.favorite = Boolean(patch.favorite);
+    }
+    if (Object.hasOwn(patch, 'tags') && Array.isArray(patch.tags)) {
+        style.tags = patch.tags.filter((t2) => typeof t2 === 'string' && t2.trim());
     }
 
     return style;

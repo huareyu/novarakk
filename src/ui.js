@@ -21,6 +21,10 @@ import {
     createStyle,
     updateStyle,
     removeStyle,
+    toggleStyleFavorite,
+    ensureStyleTags,
+    addStyleTag,
+    removeStyleTag,
     ensureAdditionalReferencesArray,
     ensureLorebooks,
     getActiveLorebook,
@@ -283,7 +287,9 @@ function buildApiSettingsSectionHtml(settings = getSettings()) {
                         <option value="16:9" ${settings.aspectRatio === '16:9' ? 'selected' : ''}>${t`16:9 (Wide)`}</option>
                         <option value="21:9" ${settings.aspectRatio === '21:9' ? 'selected' : ''}>${t`21:9 (Ultra-wide)`}</option>
                     </select>
-                    <div></div>
+                    <div id="iig_override_aspect_ratio_btn" class="menu_button iig-override-btn ${settings.overrideAspectRatio ? 'iig-override-active' : ''}" title="${t`Force override: always use this value, ignore AI prompt`}">
+                        <i class="fa-solid fa-lock${settings.overrideAspectRatio ? '' : '-open'}"></i>
+                    </div>
                 </div>
                 <div class="flex-row">
                     <label for="iig_image_size">${t`Resolution`}</label>
@@ -293,7 +299,9 @@ function buildApiSettingsSectionHtml(settings = getSettings()) {
                         <option value="2K" ${settings.imageSize === '2K' ? 'selected' : ''}>2K</option>
                         <option value="4K" ${settings.imageSize === '4K' ? 'selected' : ''}>4K</option>
                     </select>
-                    <div></div>
+                    <div id="iig_override_image_size_btn" class="menu_button iig-override-btn ${settings.overrideImageSize ? 'iig-override-active' : ''}" title="${t`Force override: always use this value, ignore AI prompt`}">
+                        <i class="fa-solid fa-lock${settings.overrideImageSize ? '' : '-open'}"></i>
+                    </div>
                 </div>
             </div>
 
@@ -483,48 +491,225 @@ function buildApiSettingsSectionHtml(settings = getSettings()) {
 
 // ----- Styles section -----
 
-function buildStyleListHtml(settings = getSettings()) {
-    const styles = ensureStyles(settings);
-    const activeId = settings.activeStyleId;
+const STYLES_PER_PAGE = 8;
 
-    if (styles.length === 0) {
-        return `<p class="hint">${t`No styles. Add a style and activate it.`}</p>`;
+const styleViewState = {
+    page: 0,
+    sort: 'newest',
+    filter: 'all',
+    filterTag: '',
+};
+
+function truncateStyleValue(value, maxLen = 60) {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return '';
+    return trimmed.length > maxLen ? trimmed.slice(0, maxLen) + '…' : trimmed;
+}
+
+function getSortedFilteredStyles(settings = getSettings()) {
+    let styles = ensureStyles(settings).slice();
+
+    if (styleViewState.filter === 'favorites') {
+        styles = styles.filter((s) => s.favorite);
     }
 
-    return styles.map((style) => `
-        <div class="iig-style-preset-row ${style.id === activeId ? 'iig-style-preset-row-active' : ''}" data-style-id="${style.id}">
-            <div class="menu_button iig-style-preset-select" data-style-activate="${style.id}">
-                <i class="fa-solid ${style.id === activeId ? 'fa-check-circle' : 'fa-palette'}"></i>
-                <span>${sanitizeForHtml(style.name)}</span>
+    if (styleViewState.filterTag) {
+        styles = styles.filter((s) => s.tags.includes(styleViewState.filterTag));
+    }
+
+    const favFirst = (a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0);
+
+    switch (styleViewState.sort) {
+        case 'name-asc':
+            styles.sort((a, b) => favFirst(a, b) || a.name.localeCompare(b.name));
+            break;
+        case 'name-desc':
+            styles.sort((a, b) => favFirst(a, b) || b.name.localeCompare(a.name));
+            break;
+        case 'oldest':
+            styles.sort((a, b) => favFirst(a, b) || (a.createdAt || 0) - (b.createdAt || 0));
+            break;
+        case 'newest':
+        default:
+            styles.sort((a, b) => favFirst(a, b) || (b.createdAt || 0) - (a.createdAt || 0));
+            break;
+    }
+
+    return styles;
+}
+
+function buildStyleSortBarHtml(totalCount, settings = getSettings()) {
+    const s = styleViewState;
+    const sortOptions = [
+        { value: 'newest', label: t`Newest` },
+        { value: 'oldest', label: t`Oldest` },
+        { value: 'name-asc', label: 'A→Z' },
+        { value: 'name-desc', label: 'Z→A' },
+    ];
+    const sortHtml = sortOptions.map((o) =>
+        `<option value="${o.value}" ${s.sort === o.value ? 'selected' : ''}>${o.label}</option>`,
+    ).join('');
+
+    const favCount = ensureStyles(settings).filter((st) => st.favorite).length;
+    const allStyles = ensureStyles(settings);
+    const tags = ensureStyleTags(settings);
+
+    const tagChipsHtml = tags.map((tag) => {
+        const count = allStyles.filter((st) => st.tags.includes(tag)).length;
+        const isActive = s.filterTag === tag;
+        return `<div class="iig-styles-filter-chip iig-styles-tag-chip ${isActive ? 'active' : ''}" data-style-filter-tag="${sanitizeForHtml(tag)}" title="${sanitizeForHtml(tag)}">
+            ${sanitizeForHtml(tag)} <span class="iig-styles-filter-count">${count}</span>
+        </div>`;
+    }).join('');
+
+    return `
+        <div class="iig-styles-sort-bar">
+            <select id="iig_style_sort" class="text_pole iig-styles-sort-select" title="${t`Sort`}">
+                ${sortHtml}
+            </select>
+            <div id="iig_style_filter_all" class="iig-styles-filter-chip ${s.filter === 'all' && !s.filterTag ? 'active' : ''}" title="${t`All styles`}">
+                ${t`All`} <span class="iig-styles-filter-count">${totalCount}</span>
             </div>
-            <div class="menu_button iig-style-preset-remove" data-style-remove="${style.id}" title="${t`Delete style`}">
-                <i class="fa-solid fa-trash"></i>
+            <div id="iig_style_filter_fav" class="iig-styles-filter-chip ${s.filter === 'favorites' ? 'active' : ''}" title="${t`Favorites only`}">
+                <i class="fa-solid fa-star"></i> <span class="iig-styles-filter-count">${favCount}</span>
+            </div>
+            ${tagChipsHtml}
+        </div>
+    `;
+}
+
+function buildStyleTagsManagerHtml(settings = getSettings()) {
+    const tags = ensureStyleTags(settings);
+    const tagsHtml = tags.map((tag) =>
+        `<div class="iig-styles-tag-manage-item">
+            <span>${sanitizeForHtml(tag)}</span>
+            <div class="iig-styles-tag-manage-remove" data-remove-style-tag="${sanitizeForHtml(tag)}" title="${t`Delete tag`}"><i class="fa-solid fa-xmark"></i></div>
+        </div>`,
+    ).join('');
+
+    return `
+        <div class="iig-styles-tag-manager">
+            <div class="iig-styles-tag-manager-list">${tagsHtml}</div>
+            <div class="iig-styles-tag-manager-add">
+                <input type="text" id="iig_new_style_tag" class="text_pole flex1" placeholder="${t`New tag…`}">
+                <div id="iig_style_tag_add_btn" class="menu_button" title="${t`Add tag`}"><i class="fa-solid fa-plus"></i></div>
             </div>
         </div>
-    `).join('');
+    `;
+}
+
+function buildStylePaginationHtml(totalPages) {
+    if (totalPages <= 1) return '';
+    const page = styleViewState.page;
+    const pages = [];
+    for (let i = 0; i < totalPages; i++) {
+        pages.push(`<div class="iig-styles-page-btn ${i === page ? 'active' : ''}" data-style-page="${i}">${i + 1}</div>`);
+    }
+    return `
+        <div class="iig-styles-pagination">
+            <div class="iig-styles-page-btn ${page <= 0 ? 'disabled' : ''}" data-style-page-prev title="${t`Previous`}"><i class="fa-solid fa-chevron-left"></i></div>
+            ${pages.join('')}
+            <div class="iig-styles-page-btn ${page >= totalPages - 1 ? 'disabled' : ''}" data-style-page-next title="${t`Next`}"><i class="fa-solid fa-chevron-right"></i></div>
+        </div>
+    `;
+}
+
+function buildStyleItemTagsHtml(style, settings = getSettings()) {
+    if (!style.tags || style.tags.length === 0) return '';
+    return `<div class="iig-style-item-tags">${style.tags.map((tag) =>
+        `<span class="iig-style-item-tag">${sanitizeForHtml(tag)}</span>`,
+    ).join('')}</div>`;
+}
+
+function buildStyleListHtml(settings = getSettings()) {
+    const allSorted = getSortedFilteredStyles(settings);
+    const totalCount = ensureStyles(settings).length;
+    const totalPages = Math.max(1, Math.ceil(allSorted.length / STYLES_PER_PAGE));
+
+    if (styleViewState.page >= totalPages) styleViewState.page = Math.max(0, totalPages - 1);
+
+    const pageStyles = allSorted.slice(
+        styleViewState.page * STYLES_PER_PAGE,
+        (styleViewState.page + 1) * STYLES_PER_PAGE,
+    );
+
+    const activeId = settings.activeStyleId;
+
+    const sortBar = buildStyleSortBarHtml(totalCount, settings);
+
+    let emptyMsg = '';
+    if (styleViewState.filter === 'favorites' && styleViewState.filterTag) {
+        emptyMsg = t`No favorite styles with this tag.`;
+    } else if (styleViewState.filter === 'favorites') {
+        emptyMsg = t`No favorite styles yet.`;
+    } else if (styleViewState.filterTag) {
+        emptyMsg = t`No styles with this tag.`;
+    } else {
+        emptyMsg = t`No styles. Add a style and activate it.`;
+    }
+
+    let listHtml;
+    if (allSorted.length === 0) {
+        listHtml = `<p class="hint">${emptyMsg}</p>`;
+    } else {
+        listHtml = pageStyles.map((style) => {
+            const isActive = style.id === activeId;
+            const isFav = style.favorite;
+            const preview = truncateStyleValue(style.value);
+            return `
+            <div class="iig-style-item ${isActive ? 'iig-style-item-active' : ''}" data-style-id="${style.id}">
+                <div class="iig-style-item-fav" data-style-fav="${style.id}" title="${isFav ? t`Remove from favorites` : t`Add to favorites`}">
+                    <i class="fa-${isFav ? 'solid' : 'regular'} fa-star"></i>
+                </div>
+                <div class="iig-style-item-main" data-style-activate="${style.id}">
+                    <div class="iig-style-item-indicator">
+                        <i class="fa-solid ${isActive ? 'fa-circle-check' : 'fa-circle'}" title="${isActive ? t`Active` : t`Click to activate`}"></i>
+                    </div>
+                    <div class="iig-style-item-info">
+                        <span class="iig-style-item-name">${sanitizeForHtml(style.name)}</span>
+                        ${preview ? `<span class="iig-style-item-preview">${sanitizeForHtml(preview)}</span>` : ''}
+                        ${buildStyleItemTagsHtml(style, settings)}
+                    </div>
+                </div>
+                <div class="iig-style-item-actions">
+                    ${isActive ? `<div class="menu_button iig-style-item-action" data-style-deactivate title="${t`Deactivate`}"><i class="fa-solid fa-power-off"></i></div>` : ''}
+                    <div class="menu_button iig-style-item-action iig-style-item-delete" data-style-remove="${style.id}" title="${t`Delete`}"><i class="fa-solid fa-trash"></i></div>
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    const pagination = buildStylePaginationHtml(totalPages);
+
+    return sortBar + listHtml + pagination;
+}
+
+function buildStyleEditorTagsHtml(activeStyle, settings = getSettings()) {
+    const allTags = ensureStyleTags(settings);
+    const styleTags = activeStyle.tags || [];
+    return allTags.map((tag) => {
+        const isAssigned = styleTags.includes(tag);
+        return `<div class="iig-style-editor-tag ${isAssigned ? 'active' : ''}" data-editor-tag="${sanitizeForHtml(tag)}">
+            ${sanitizeForHtml(tag)}
+        </div>`;
+    }).join('');
 }
 
 function buildStyleEditorHtml(settings = getSettings()) {
     const activeStyle = getActiveStyle(settings);
     if (!activeStyle) {
-        return `<p class="hint">${t`Activate a style to edit its value.`}</p>`;
+        return '';
     }
 
+    const editorTagsHtml = buildStyleEditorTagsHtml(activeStyle, settings);
+
     return `
-        <div class="iig-settings-card iig-style-editor-card">
-            <h4>${t`Active style`}: ${sanitizeForHtml(activeStyle.name)}</h4>
-            <div class="flex-row">
-                <label for="iig_style_name">${t`Name`}</label>
-                <input type="text" id="iig_style_name" class="text_pole flex1" value="${sanitizeForHtml(activeStyle.name)}">
-                <div id="iig_style_disable" class="menu_button" title="${t`Disable style`}">
-                    <i class="fa-solid fa-power-off"></i>
-                </div>
+        <div class="iig-style-editor">
+            <div class="iig-style-editor-row">
+                <input type="text" id="iig_style_name" class="text_pole flex1" value="${sanitizeForHtml(activeStyle.name)}" placeholder="${t`Style name`}">
             </div>
-            <div class="flex-row">
-                <label for="iig_style_value">${t`Value`}</label>
-                <textarea id="iig_style_value" class="text_pole flex1 iig-settings-textarea" rows="3" placeholder="masterpiece, cinematic lighting, painterly">${sanitizeForHtml(activeStyle.value)}</textarea>
-                <div></div>
-            </div>
+            <textarea id="iig_style_value" class="text_pole iig-style-editor-textarea" rows="3" placeholder="masterpiece, cinematic lighting, painterly">${sanitizeForHtml(activeStyle.value)}</textarea>
+            ${editorTagsHtml ? `<div class="iig-style-editor-tags">${editorTagsHtml}</div>` : ''}
         </div>
     `;
 }
@@ -538,6 +723,10 @@ export function renderStyleSettings() {
     }
     if (editorContainer) {
         editorContainer.innerHTML = buildStyleEditorHtml(settings);
+    }
+    const tagManagerContainer = document.getElementById('iig_style_tag_manager');
+    if (tagManagerContainer) {
+        tagManagerContainer.innerHTML = buildStyleTagsManagerHtml(settings);
     }
 }
 
@@ -821,22 +1010,21 @@ async function openStylePickerModal() {
 
 function buildStylesSettingsSectionHtml() {
     const bodyHtml = `
-        <div class="iig-settings-card">
-            <div class="flex-row">
-                <label>${t`Site styles`}</label>
-                <div id="iig_style_pick_site" class="menu_button flex1" title="${t`Parse and choose style from the site`}">
-                    <i class="fa-solid fa-palette"></i> ${t`Choose from site`}
+        <div class="iig-settings-card iig-styles-card">
+            <div class="iig-styles-toolbar">
+                <div id="iig_style_pick_site" class="menu_button iig-styles-toolbar-btn" title="${t`Parse and choose style from the site`}">
+                    <i class="fa-solid fa-globe"></i> ${t`Browse`}
                 </div>
-                <div></div>
-            </div>
-            <div class="flex-row">
-                <label for="iig_new_style_name">${t`New style`}</label>
-                <input type="text" id="iig_new_style_name" class="text_pole flex1" placeholder="${t`Style name`}">
-                <div id="iig_style_add" class="menu_button" title="${t`Add style`}">
+                <input type="text" id="iig_new_style_name" class="text_pole flex1" placeholder="${t`New style name…`}">
+                <div id="iig_style_add" class="menu_button iig-styles-toolbar-btn" title="${t`Add style`}">
                     <i class="fa-solid fa-plus"></i>
                 </div>
+                <div id="iig_style_tags_manage_toggle" class="menu_button iig-styles-toolbar-btn" title="${t`Manage tags`}">
+                    <i class="fa-solid fa-tags"></i>
+                </div>
             </div>
-            <div id="iig_style_presets" class="iig-style-presets"></div>
+            <div id="iig_style_tag_manager" class="iig-hidden"></div>
+            <div id="iig_style_presets" class="iig-style-list"></div>
             <div id="iig_style_editor"></div>
         </div>
     `;
@@ -1497,6 +1685,19 @@ function applyProfileValuesToInputs(settings) {
     setVal('iig_quality', settings.quality);
     setVal('iig_aspect_ratio', settings.aspectRatio);
     setVal('iig_image_size', settings.imageSize);
+    // Override lock buttons
+    const arBtn = document.getElementById('iig_override_aspect_ratio_btn');
+    if (arBtn) {
+        arBtn.classList.toggle('iig-override-active', settings.overrideAspectRatio);
+        const arIcon = arBtn.querySelector('i');
+        if (arIcon) arIcon.className = `fa-solid fa-lock${settings.overrideAspectRatio ? '' : '-open'}`;
+    }
+    const isBtn = document.getElementById('iig_override_image_size_btn');
+    if (isBtn) {
+        isBtn.classList.toggle('iig-override-active', settings.overrideImageSize);
+        const isIcon = isBtn.querySelector('i');
+        if (isIcon) isIcon.className = `fa-solid fa-lock${settings.overrideImageSize ? '' : '-open'}`;
+    }
     setVal('iig_naistera_model', normalizeNaisteraModel(settings.naisteraModel));
     setVal('iig_naistera_aspect_ratio', settings.naisteraAspectRatio);
     setChk('iig_naistera_video_test', settings.naisteraVideoTest);
@@ -1796,8 +1997,26 @@ function bindApiSectionEvents(settings, updateVisibility) {
         saveSettings();
     });
 
+    document.getElementById('iig_override_aspect_ratio_btn')?.addEventListener('click', () => {
+        settings.overrideAspectRatio = !settings.overrideAspectRatio;
+        const btn = document.getElementById('iig_override_aspect_ratio_btn');
+        btn?.classList.toggle('iig-override-active', settings.overrideAspectRatio);
+        const icon = btn?.querySelector('i');
+        if (icon) icon.className = `fa-solid fa-lock${settings.overrideAspectRatio ? '' : '-open'}`;
+        saveSettings();
+    });
+
     document.getElementById('iig_image_size')?.addEventListener('change', (e) => {
         settings.imageSize = e.target.value;
+        saveSettings();
+    });
+
+    document.getElementById('iig_override_image_size_btn')?.addEventListener('click', () => {
+        settings.overrideImageSize = !settings.overrideImageSize;
+        const btn = document.getElementById('iig_override_image_size_btn');
+        btn?.classList.toggle('iig-override-active', settings.overrideImageSize);
+        const icon = btn?.querySelector('i');
+        if (icon) icon.className = `fa-solid fa-lock${settings.overrideImageSize ? '' : '-open'}`;
         saveSettings();
     });
 
@@ -2053,9 +2272,11 @@ function bindStylesSectionEvents(settings) {
     document.getElementById('iig_style_add')?.addEventListener('click', () => {
         const input = document.getElementById('iig_new_style_name');
         const style = createStyle(input?.value || '');
-        if (input) {
-            input.value = '';
-        }
+        if (input) input.value = '';
+        styleViewState.page = 0;
+        if (styleViewState.sort !== 'newest') styleViewState.sort = 'newest';
+        if (styleViewState.filter === 'favorites') styleViewState.filter = 'all';
+        styleViewState.filterTag = '';
         saveSettings();
         renderStyleSettings();
         iigLog('INFO', `Created style: ${style.name}`);
@@ -2068,62 +2289,205 @@ function bindStylesSectionEvents(settings) {
         }
     });
 
-    document.getElementById('iig_style_presets')?.addEventListener('click', (e) => {
-        const activateButton = e.target instanceof Element ? e.target.closest('[data-style-activate]') : null;
-        if (activateButton) {
-            settings.activeStyleId = activateButton.getAttribute('data-style-activate') || '';
+    // Tag manager toggle
+    document.getElementById('iig_style_tags_manage_toggle')?.addEventListener('click', () => {
+        const mgr = document.getElementById('iig_style_tag_manager');
+        if (!mgr) return;
+        const wasHidden = mgr.classList.contains('iig-hidden');
+        mgr.classList.toggle('iig-hidden', !wasHidden);
+        if (wasHidden) {
+            mgr.innerHTML = buildStyleTagsManagerHtml(settings);
+        }
+    });
+
+    // Tag manager delegated events
+    document.getElementById('iig_style_tag_manager')?.addEventListener('click', (e) => {
+        const target = e.target instanceof Element ? e.target : null;
+        if (!target) return;
+
+        const removeBtn = target.closest('[data-remove-style-tag]');
+        if (removeBtn) {
+            const tagName = removeBtn.getAttribute('data-remove-style-tag') || '';
+            removeStyleTag(tagName, settings);
+            if (styleViewState.filterTag === tagName) styleViewState.filterTag = '';
+            saveSettings();
+            renderStyleSettings();
+            const mgr = document.getElementById('iig_style_tag_manager');
+            if (mgr) mgr.innerHTML = buildStyleTagsManagerHtml(settings);
+            return;
+        }
+
+        if (target.closest('#iig_style_tag_add_btn')) {
+            const input = document.getElementById('iig_new_style_tag');
+            if (input instanceof HTMLInputElement && input.value.trim()) {
+                addStyleTag(input.value.trim(), settings);
+                input.value = '';
+                saveSettings();
+                renderStyleSettings();
+                const mgr = document.getElementById('iig_style_tag_manager');
+                if (mgr) mgr.innerHTML = buildStyleTagsManagerHtml(settings);
+            }
+            return;
+        }
+    });
+
+    document.getElementById('iig_style_tag_manager')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.id === 'iig_new_style_tag') {
+            e.preventDefault();
+            document.getElementById('iig_style_tag_add_btn')?.click();
+        }
+    });
+
+    const presetsContainer = document.getElementById('iig_style_presets');
+
+    presetsContainer?.addEventListener('click', (e) => {
+        const target = e.target instanceof Element ? e.target : null;
+        if (!target) return;
+
+        const favButton = target.closest('[data-style-fav]');
+        if (favButton) {
+            const styleId = favButton.getAttribute('data-style-fav') || '';
+            toggleStyleFavorite(styleId);
             saveSettings();
             renderStyleSettings();
             return;
         }
 
-        const removeButton = e.target instanceof Element ? e.target.closest('[data-style-remove]') : null;
-        if (!removeButton) {
+        const activateButton = target.closest('[data-style-activate]');
+        if (activateButton) {
+            const id = activateButton.getAttribute('data-style-activate') || '';
+            settings.activeStyleId = id === settings.activeStyleId ? '' : id;
+            saveSettings();
+            renderStyleSettings();
             return;
         }
 
-        const styleId = removeButton.getAttribute('data-style-remove') || '';
-        removeStyle(styleId);
-        saveSettings();
-        renderStyleSettings();
+        const deactivateButton = target.closest('[data-style-deactivate]');
+        if (deactivateButton) {
+            settings.activeStyleId = '';
+            saveSettings();
+            renderStyleSettings();
+            return;
+        }
+
+        const removeButton = target.closest('[data-style-remove]');
+        if (removeButton) {
+            const styleId = removeButton.getAttribute('data-style-remove') || '';
+            removeStyle(styleId);
+            saveSettings();
+            renderStyleSettings();
+            return;
+        }
+
+        const pageBtn = target.closest('[data-style-page]');
+        if (pageBtn) {
+            styleViewState.page = parseInt(pageBtn.getAttribute('data-style-page'), 10) || 0;
+            renderStyleSettings();
+            return;
+        }
+
+        if (target.closest('[data-style-page-prev]')) {
+            if (styleViewState.page > 0) {
+                styleViewState.page--;
+                renderStyleSettings();
+            }
+            return;
+        }
+
+        if (target.closest('[data-style-page-next]')) {
+            const allSorted = getSortedFilteredStyles(settings);
+            const totalPages = Math.max(1, Math.ceil(allSorted.length / STYLES_PER_PAGE));
+            if (styleViewState.page < totalPages - 1) {
+                styleViewState.page++;
+                renderStyleSettings();
+            }
+            return;
+        }
+
+        if (target.closest('#iig_style_filter_all')) {
+            styleViewState.filter = 'all';
+            styleViewState.filterTag = '';
+            styleViewState.page = 0;
+            renderStyleSettings();
+            return;
+        }
+
+        if (target.closest('#iig_style_filter_fav')) {
+            styleViewState.filter = styleViewState.filter === 'favorites' ? 'all' : 'favorites';
+            styleViewState.page = 0;
+            renderStyleSettings();
+            return;
+        }
+
+        const tagChip = target.closest('[data-style-filter-tag]');
+        if (tagChip) {
+            const tag = tagChip.getAttribute('data-style-filter-tag') || '';
+            styleViewState.filterTag = styleViewState.filterTag === tag ? '' : tag;
+            styleViewState.page = 0;
+            renderStyleSettings();
+            return;
+        }
     });
 
+    presetsContainer?.addEventListener('change', (e) => {
+        const target = e.target;
+        if (target instanceof HTMLSelectElement && target.id === 'iig_style_sort') {
+            styleViewState.sort = target.value;
+            styleViewState.page = 0;
+            renderStyleSettings();
+        }
+    });
+
+    // Style editor — input for name/value
     document.getElementById('iig_style_editor')?.addEventListener('input', (e) => {
         const activeStyle = getActiveStyle(settings);
-        if (!activeStyle) {
-            return;
-        }
+        if (!activeStyle) return;
 
         const target = e.target;
-        if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
-            return;
-        }
+        if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
 
         if (target.id === 'iig_style_name') {
             updateStyle(activeStyle.id, { name: target.value });
             saveSettings();
-            const activeButton = document.querySelector(`[data-style-activate="${activeStyle.id}"] span`);
-            if (activeButton) {
-                activeButton.textContent = getActiveStyle(settings)?.name || target.value.trim() || activeStyle.name;
+            const nameEl = document.querySelector(`[data-style-id="${activeStyle.id}"] .iig-style-item-name`);
+            if (nameEl) {
+                nameEl.textContent = getActiveStyle(settings)?.name || target.value.trim() || activeStyle.name;
             }
             return;
         }
         if (target.id === 'iig_style_value') {
             updateStyle(activeStyle.id, { value: target.value });
             saveSettings();
+            const previewEl = document.querySelector(`[data-style-id="${activeStyle.id}"] .iig-style-item-preview`);
+            if (previewEl) {
+                previewEl.textContent = truncateStyleValue(target.value);
+            }
             return;
         }
     });
 
+    // Style editor — tag assignment toggle
     document.getElementById('iig_style_editor')?.addEventListener('click', (e) => {
-        const disableButton = e.target instanceof Element ? e.target.closest('#iig_style_disable') : null;
-        if (!disableButton) {
+        const target = e.target instanceof Element ? e.target : null;
+        if (!target) return;
+
+        const editorTag = target.closest('[data-editor-tag]');
+        if (editorTag) {
+            const activeStyle = getActiveStyle(settings);
+            if (!activeStyle) return;
+            const tagName = editorTag.getAttribute('data-editor-tag') || '';
+            const tags = activeStyle.tags ? activeStyle.tags.slice() : [];
+            const idx = tags.indexOf(tagName);
+            if (idx === -1) {
+                tags.push(tagName);
+            } else {
+                tags.splice(idx, 1);
+            }
+            updateStyle(activeStyle.id, { tags });
+            saveSettings();
+            renderStyleSettings();
             return;
         }
-
-        settings.activeStyleId = '';
-        saveSettings();
-        renderStyleSettings();
     });
 }
 

@@ -25,6 +25,18 @@ import {
     ensureStyleTags,
     addStyleTag,
     removeStyleTag,
+    ensurePrefixes,
+    createPrefix,
+    getActivePrefix,
+    updatePrefix,
+    removePrefix,
+    togglePrefixFavorite,
+    ensureSuffixes,
+    createSuffix,
+    getActiveSuffix,
+    updateSuffix,
+    removeSuffix,
+    toggleSuffixFavorite,
     ensureAdditionalReferencesArray,
     ensureLorebooks,
     getActiveLorebook,
@@ -46,9 +58,11 @@ import {
     NOVELAI_SCHEDULERS,
     NOVELAI_SIZES,
     ensureNovelaiPresets,
-    addNovelaiPreset,
-    removeNovelaiPreset,
+    createNovelaiPreset,
+    getActiveNovelaiPreset,
     updateNovelaiPreset,
+    removeNovelaiPreset,
+    toggleNovelaiPresetFavorite,
     MAX_CONTEXT_IMAGES,
     MAX_ADDITIONAL_REFERENCES,
     ensureConnectionProfiles,
@@ -189,6 +203,7 @@ function buildApiSettingsSectionHtml(settings = getSettings()) {
                     <option value="electronhub" ${settings.apiType === 'electronhub' ? 'selected' : ''}>${t`Electron Hub (/v1/images/*)`}</option>
                     <option value="naistera" ${settings.apiType === 'naistera' ? 'selected' : ''}>${t`Naistera (naistera.org)`}</option>
                     <option value="void" ${settings.apiType === 'void' ? 'selected' : ''}>${t`VoidAI / RouteMyAI (chat-completions)`}</option>
+                    <option value="aigate" ${settings.apiType === 'aigate' ? 'selected' : ''}>${t`AIGate (GPT Image + Gemini)`}</option>
                     <option value="novelai" ${settings.apiType === 'novelai' ? 'selected' : ''}>${t`NovelAI (via ST proxy)`}</option>
                 </select>
                 <div></div>
@@ -489,245 +504,380 @@ function buildApiSettingsSectionHtml(settings = getSettings()) {
     return buildSettingsSectionHtml('iig_api_section', t`API settings`, bodyHtml, true);
 }
 
-// ----- Styles section -----
+// ----- Generic preset section factory (styles / prefixes / suffixes) -----
 
-const STYLES_PER_PAGE = 8;
+const PRESETS_PER_PAGE = 8;
 
-const styleViewState = {
-    page: 0,
-    sort: 'newest',
-    filter: 'all',
-    filterTag: '',
-};
-
-function truncateStyleValue(value, maxLen = 60) {
+function truncatePresetValue(value, maxLen = 60) {
     const trimmed = String(value || '').trim();
     if (!trimmed) return '';
     return trimmed.length > maxLen ? trimmed.slice(0, maxLen) + '…' : trimmed;
 }
 
-function getSortedFilteredStyles(settings = getSettings()) {
-    let styles = ensureStyles(settings).slice();
+function createPresetSectionUI(cfg) {
+    const {
+        p,
+        sectionTitle,
+        valuePlaceholder,
+        showBrowse,
+        multiActive,
+        ensureFn, createFn, getActiveFn, updateFn, removeFn, toggleFavoriteFn,
+        activeIdKey,
+    } = cfg;
 
-    if (styleViewState.filter === 'favorites') {
-        styles = styles.filter((s) => s.favorite);
+    const vs = { page: 0, sort: 'newest', filter: 'all', filterTag: '' };
+
+    function id(suffix) { return `iig_${p}_${suffix}`; }
+
+    function getSortedFiltered(settings) {
+        let items = ensureFn(settings).slice();
+        if (vs.filter === 'favorites') items = items.filter((s) => s.favorite);
+        if (vs.filterTag) items = items.filter((s) => s.tags.includes(vs.filterTag));
+        const favFirst = (a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0);
+        switch (vs.sort) {
+            case 'name-asc':  items.sort((a, b) => favFirst(a, b) || a.name.localeCompare(b.name)); break;
+            case 'name-desc': items.sort((a, b) => favFirst(a, b) || b.name.localeCompare(a.name)); break;
+            case 'oldest':    items.sort((a, b) => favFirst(a, b) || (a.createdAt || 0) - (b.createdAt || 0)); break;
+            default:          items.sort((a, b) => favFirst(a, b) || (b.createdAt || 0) - (a.createdAt || 0)); break;
+        }
+        return items;
     }
 
-    if (styleViewState.filterTag) {
-        styles = styles.filter((s) => s.tags.includes(styleViewState.filterTag));
-    }
-
-    const favFirst = (a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0);
-
-    switch (styleViewState.sort) {
-        case 'name-asc':
-            styles.sort((a, b) => favFirst(a, b) || a.name.localeCompare(b.name));
-            break;
-        case 'name-desc':
-            styles.sort((a, b) => favFirst(a, b) || b.name.localeCompare(a.name));
-            break;
-        case 'oldest':
-            styles.sort((a, b) => favFirst(a, b) || (a.createdAt || 0) - (b.createdAt || 0));
-            break;
-        case 'newest':
-        default:
-            styles.sort((a, b) => favFirst(a, b) || (b.createdAt || 0) - (a.createdAt || 0));
-            break;
-    }
-
-    return styles;
-}
-
-function buildStyleSortBarHtml(totalCount, settings = getSettings()) {
-    const s = styleViewState;
-    const sortOptions = [
-        { value: 'newest', label: t`Newest` },
-        { value: 'oldest', label: t`Oldest` },
-        { value: 'name-asc', label: 'A→Z' },
-        { value: 'name-desc', label: 'Z→A' },
-    ];
-    const sortHtml = sortOptions.map((o) =>
-        `<option value="${o.value}" ${s.sort === o.value ? 'selected' : ''}>${o.label}</option>`,
-    ).join('');
-
-    const favCount = ensureStyles(settings).filter((st) => st.favorite).length;
-    const allStyles = ensureStyles(settings);
-    const tags = ensureStyleTags(settings);
-
-    const tagChipsHtml = tags.map((tag) => {
-        const count = allStyles.filter((st) => st.tags.includes(tag)).length;
-        const isActive = s.filterTag === tag;
-        return `<div class="iig-styles-filter-chip iig-styles-tag-chip ${isActive ? 'active' : ''}" data-style-filter-tag="${sanitizeForHtml(tag)}" title="${sanitizeForHtml(tag)}">
-            ${sanitizeForHtml(tag)} <span class="iig-styles-filter-count">${count}</span>
-        </div>`;
-    }).join('');
-
-    return `
-        <div class="iig-styles-sort-bar">
-            <select id="iig_style_sort" class="text_pole iig-styles-sort-select" title="${t`Sort`}">
-                ${sortHtml}
-            </select>
-            <div id="iig_style_filter_all" class="iig-styles-filter-chip ${s.filter === 'all' && !s.filterTag ? 'active' : ''}" title="${t`All styles`}">
-                ${t`All`} <span class="iig-styles-filter-count">${totalCount}</span>
-            </div>
-            <div id="iig_style_filter_fav" class="iig-styles-filter-chip ${s.filter === 'favorites' ? 'active' : ''}" title="${t`Favorites only`}">
-                <i class="fa-solid fa-star"></i> <span class="iig-styles-filter-count">${favCount}</span>
-            </div>
+    function buildSortBarHtml(totalCount, settings) {
+        const sortOpts = [
+            { value: 'newest', label: t`Newest` }, { value: 'oldest', label: t`Oldest` },
+            { value: 'name-asc', label: 'A→Z' }, { value: 'name-desc', label: 'Z→A' },
+        ];
+        const sortHtml = sortOpts.map((o) =>
+            `<option value="${o.value}" ${vs.sort === o.value ? 'selected' : ''}>${o.label}</option>`,
+        ).join('');
+        const allItems = ensureFn(settings);
+        const favCount = allItems.filter((s) => s.favorite).length;
+        const tags = ensureStyleTags(settings);
+        const tagChipsHtml = tags.map((tag) => {
+            const count = allItems.filter((s) => s.tags.includes(tag)).length;
+            return `<div class="iig-styles-filter-chip iig-styles-tag-chip ${vs.filterTag === tag ? 'active' : ''}" data-ps-filter-tag="${sanitizeForHtml(tag)}">${sanitizeForHtml(tag)} <span class="iig-styles-filter-count">${count}</span></div>`;
+        }).join('');
+        return `<div class="iig-styles-sort-bar">
+            <select class="text_pole iig-styles-sort-select" data-ps-sort title="${t`Sort`}">${sortHtml}</select>
+            <div class="iig-styles-filter-chip ${vs.filter === 'all' && !vs.filterTag ? 'active' : ''}" data-ps-filter-all>${t`All`} <span class="iig-styles-filter-count">${totalCount}</span></div>
+            <div class="iig-styles-filter-chip ${vs.filter === 'favorites' ? 'active' : ''}" data-ps-filter-fav><i class="fa-solid fa-star"></i> <span class="iig-styles-filter-count">${favCount}</span></div>
             ${tagChipsHtml}
-        </div>
-    `;
-}
+        </div>`;
+    }
 
-function buildStyleTagsManagerHtml(settings = getSettings()) {
-    const tags = ensureStyleTags(settings);
-    const tagsHtml = tags.map((tag) =>
-        `<div class="iig-styles-tag-manage-item">
-            <span>${sanitizeForHtml(tag)}</span>
-            <div class="iig-styles-tag-manage-remove" data-remove-style-tag="${sanitizeForHtml(tag)}" title="${t`Delete tag`}"><i class="fa-solid fa-xmark"></i></div>
-        </div>`,
-    ).join('');
+    function buildPaginationHtml(totalPages) {
+        if (totalPages <= 1) return '';
+        const pages = [];
+        for (let i = 0; i < totalPages; i++) {
+            pages.push(`<div class="iig-styles-page-btn ${i === vs.page ? 'active' : ''}" data-ps-page="${i}">${i + 1}</div>`);
+        }
+        return `<div class="iig-styles-pagination">
+            <div class="iig-styles-page-btn ${vs.page <= 0 ? 'disabled' : ''}" data-ps-page-prev><i class="fa-solid fa-chevron-left"></i></div>
+            ${pages.join('')}
+            <div class="iig-styles-page-btn ${vs.page >= totalPages - 1 ? 'disabled' : ''}" data-ps-page-next><i class="fa-solid fa-chevron-right"></i></div>
+        </div>`;
+    }
 
-    return `
-        <div class="iig-styles-tag-manager">
+    function buildItemTagsHtml(item) {
+        if (!item.tags || item.tags.length === 0) return '';
+        return `<div class="iig-style-item-tags">${item.tags.map((tag) =>
+            `<span class="iig-style-item-tag">${sanitizeForHtml(tag)}</span>`).join('')}</div>`;
+    }
+
+    function buildListHtml(settings) {
+        const allSorted = getSortedFiltered(settings);
+        const totalCount = ensureFn(settings).length;
+        const totalPages = Math.max(1, Math.ceil(allSorted.length / PRESETS_PER_PAGE));
+        if (vs.page >= totalPages) vs.page = Math.max(0, totalPages - 1);
+        const pageItems = allSorted.slice(vs.page * PRESETS_PER_PAGE, (vs.page + 1) * PRESETS_PER_PAGE);
+        const activeId = settings[activeIdKey];
+        const sortBar = buildSortBarHtml(totalCount, settings);
+        let emptyMsg;
+        if (vs.filter === 'favorites' && vs.filterTag) emptyMsg = t`No favorites with this tag.`;
+        else if (vs.filter === 'favorites') emptyMsg = t`No favorites yet.`;
+        else if (vs.filterTag) emptyMsg = t`No items with this tag.`;
+        else emptyMsg = t`No presets yet. Add one above.`;
+        let listHtml;
+        if (allSorted.length === 0) {
+            listHtml = `<p class="hint">${emptyMsg}</p>`;
+        } else {
+            listHtml = pageItems.map((item) => {
+                const isEditing = item.id === activeId;
+                const isFav = item.favorite;
+                const preview = truncatePresetValue(item.value);
+                const isEnabled = multiActive ? item.enabled !== false : isEditing;
+                const indicatorIcon = multiActive
+                    ? `fa-${isEnabled ? 'solid fa-square-check' : 'regular fa-square'}`
+                    : `fa-solid ${isEditing ? 'fa-circle-check' : 'fa-circle'}`;
+                const indicatorAttr = multiActive ? `data-ps-toggle-enabled="${item.id}"` : '';
+                return `<div class="iig-style-item ${isEditing ? 'iig-style-item-active' : ''}" data-ps-id="${item.id}">
+                    <div class="iig-style-item-fav" data-ps-fav="${item.id}" title="${isFav ? t`Remove from favorites` : t`Add to favorites`}"><i class="fa-${isFav ? 'solid' : 'regular'} fa-star"></i></div>
+                    <div class="iig-style-item-main" data-ps-activate="${item.id}">
+                        <div class="iig-style-item-indicator" ${indicatorAttr}><i class="${indicatorIcon}"></i></div>
+                        <div class="iig-style-item-info">
+                            <span class="iig-style-item-name">${sanitizeForHtml(item.name)}</span>
+                            ${preview ? `<span class="iig-style-item-preview">${sanitizeForHtml(preview)}</span>` : ''}
+                            ${buildItemTagsHtml(item)}
+                        </div>
+                    </div>
+                    <div class="iig-style-item-actions">
+                        ${!multiActive && isEditing ? `<div class="menu_button iig-style-item-action" data-ps-deactivate><i class="fa-solid fa-power-off"></i></div>` : ''}
+                        <div class="menu_button iig-style-item-action iig-style-item-delete" data-ps-remove="${item.id}"><i class="fa-solid fa-trash"></i></div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+        return sortBar + listHtml + buildPaginationHtml(totalPages);
+    }
+
+    function buildEditorHtml(settings) {
+        const active = getActiveFn(settings);
+        if (!active) return '';
+        const allTags = ensureStyleTags(settings);
+        const editorTagsHtml = allTags.map((tag) => {
+            const on = (active.tags || []).includes(tag);
+            return `<div class="iig-style-editor-tag ${on ? 'active' : ''}" data-ps-editor-tag="${sanitizeForHtml(tag)}">${sanitizeForHtml(tag)}</div>`;
+        }).join('');
+        return `<div class="iig-style-editor">
+            <div class="iig-style-editor-row">
+                <input type="text" data-ps-name class="text_pole flex1" value="${sanitizeForHtml(active.name)}" placeholder="${t`Name`}">
+            </div>
+            <textarea data-ps-value class="text_pole iig-style-editor-textarea" rows="3" placeholder="${valuePlaceholder}">${sanitizeForHtml(active.value)}</textarea>
+            ${editorTagsHtml ? `<div class="iig-style-editor-tags">${editorTagsHtml}</div>` : ''}
+        </div>`;
+    }
+
+    function buildTagManagerHtml(settings) {
+        const tags = ensureStyleTags(settings);
+        const tagsHtml = tags.map((tag) =>
+            `<div class="iig-styles-tag-manage-item"><span>${sanitizeForHtml(tag)}</span><div class="iig-styles-tag-manage-remove" data-ps-remove-tag="${sanitizeForHtml(tag)}"><i class="fa-solid fa-xmark"></i></div></div>`).join('');
+        return `<div class="iig-styles-tag-manager">
             <div class="iig-styles-tag-manager-list">${tagsHtml}</div>
             <div class="iig-styles-tag-manager-add">
-                <input type="text" id="iig_new_style_tag" class="text_pole flex1" placeholder="${t`New tag…`}">
-                <div id="iig_style_tag_add_btn" class="menu_button" title="${t`Add tag`}"><i class="fa-solid fa-plus"></i></div>
+                <input type="text" data-ps-new-tag class="text_pole flex1" placeholder="${t`New tag…`}">
+                <div class="menu_button" data-ps-add-tag><i class="fa-solid fa-plus"></i></div>
             </div>
-        </div>
-    `;
-}
-
-function buildStylePaginationHtml(totalPages) {
-    if (totalPages <= 1) return '';
-    const page = styleViewState.page;
-    const pages = [];
-    for (let i = 0; i < totalPages; i++) {
-        pages.push(`<div class="iig-styles-page-btn ${i === page ? 'active' : ''}" data-style-page="${i}">${i + 1}</div>`);
-    }
-    return `
-        <div class="iig-styles-pagination">
-            <div class="iig-styles-page-btn ${page <= 0 ? 'disabled' : ''}" data-style-page-prev title="${t`Previous`}"><i class="fa-solid fa-chevron-left"></i></div>
-            ${pages.join('')}
-            <div class="iig-styles-page-btn ${page >= totalPages - 1 ? 'disabled' : ''}" data-style-page-next title="${t`Next`}"><i class="fa-solid fa-chevron-right"></i></div>
-        </div>
-    `;
-}
-
-function buildStyleItemTagsHtml(style, settings = getSettings()) {
-    if (!style.tags || style.tags.length === 0) return '';
-    return `<div class="iig-style-item-tags">${style.tags.map((tag) =>
-        `<span class="iig-style-item-tag">${sanitizeForHtml(tag)}</span>`,
-    ).join('')}</div>`;
-}
-
-function buildStyleListHtml(settings = getSettings()) {
-    const allSorted = getSortedFilteredStyles(settings);
-    const totalCount = ensureStyles(settings).length;
-    const totalPages = Math.max(1, Math.ceil(allSorted.length / STYLES_PER_PAGE));
-
-    if (styleViewState.page >= totalPages) styleViewState.page = Math.max(0, totalPages - 1);
-
-    const pageStyles = allSorted.slice(
-        styleViewState.page * STYLES_PER_PAGE,
-        (styleViewState.page + 1) * STYLES_PER_PAGE,
-    );
-
-    const activeId = settings.activeStyleId;
-
-    const sortBar = buildStyleSortBarHtml(totalCount, settings);
-
-    let emptyMsg = '';
-    if (styleViewState.filter === 'favorites' && styleViewState.filterTag) {
-        emptyMsg = t`No favorite styles with this tag.`;
-    } else if (styleViewState.filter === 'favorites') {
-        emptyMsg = t`No favorite styles yet.`;
-    } else if (styleViewState.filterTag) {
-        emptyMsg = t`No styles with this tag.`;
-    } else {
-        emptyMsg = t`No styles. Add a style and activate it.`;
-    }
-
-    let listHtml;
-    if (allSorted.length === 0) {
-        listHtml = `<p class="hint">${emptyMsg}</p>`;
-    } else {
-        listHtml = pageStyles.map((style) => {
-            const isActive = style.id === activeId;
-            const isFav = style.favorite;
-            const preview = truncateStyleValue(style.value);
-            return `
-            <div class="iig-style-item ${isActive ? 'iig-style-item-active' : ''}" data-style-id="${style.id}">
-                <div class="iig-style-item-fav" data-style-fav="${style.id}" title="${isFav ? t`Remove from favorites` : t`Add to favorites`}">
-                    <i class="fa-${isFav ? 'solid' : 'regular'} fa-star"></i>
-                </div>
-                <div class="iig-style-item-main" data-style-activate="${style.id}">
-                    <div class="iig-style-item-indicator">
-                        <i class="fa-solid ${isActive ? 'fa-circle-check' : 'fa-circle'}" title="${isActive ? t`Active` : t`Click to activate`}"></i>
-                    </div>
-                    <div class="iig-style-item-info">
-                        <span class="iig-style-item-name">${sanitizeForHtml(style.name)}</span>
-                        ${preview ? `<span class="iig-style-item-preview">${sanitizeForHtml(preview)}</span>` : ''}
-                        ${buildStyleItemTagsHtml(style, settings)}
-                    </div>
-                </div>
-                <div class="iig-style-item-actions">
-                    ${isActive ? `<div class="menu_button iig-style-item-action" data-style-deactivate title="${t`Deactivate`}"><i class="fa-solid fa-power-off"></i></div>` : ''}
-                    <div class="menu_button iig-style-item-action iig-style-item-delete" data-style-remove="${style.id}" title="${t`Delete`}"><i class="fa-solid fa-trash"></i></div>
-                </div>
-            </div>`;
-        }).join('');
-    }
-
-    const pagination = buildStylePaginationHtml(totalPages);
-
-    return sortBar + listHtml + pagination;
-}
-
-function buildStyleEditorTagsHtml(activeStyle, settings = getSettings()) {
-    const allTags = ensureStyleTags(settings);
-    const styleTags = activeStyle.tags || [];
-    return allTags.map((tag) => {
-        const isAssigned = styleTags.includes(tag);
-        return `<div class="iig-style-editor-tag ${isAssigned ? 'active' : ''}" data-editor-tag="${sanitizeForHtml(tag)}">
-            ${sanitizeForHtml(tag)}
         </div>`;
-    }).join('');
-}
-
-function buildStyleEditorHtml(settings = getSettings()) {
-    const activeStyle = getActiveStyle(settings);
-    if (!activeStyle) {
-        return '';
     }
 
-    const editorTagsHtml = buildStyleEditorTagsHtml(activeStyle, settings);
+    function render() {
+        const settings = getSettings();
+        const list = document.getElementById(id('presets'));
+        const editor = document.getElementById(id('editor'));
+        const tagMgr = document.getElementById(id('tag_manager'));
+        if (list) list.innerHTML = buildListHtml(settings);
+        if (editor) editor.innerHTML = buildEditorHtml(settings);
+        if (tagMgr && !tagMgr.classList.contains('iig-hidden')) {
+            tagMgr.innerHTML = buildTagManagerHtml(settings);
+        }
+    }
 
-    return `
-        <div class="iig-style-editor">
-            <div class="iig-style-editor-row">
-                <input type="text" id="iig_style_name" class="text_pole flex1" value="${sanitizeForHtml(activeStyle.name)}" placeholder="${t`Style name`}">
+    function buildSectionHtml() {
+        const browseBtn = showBrowse
+            ? `<div id="${id('pick_site')}" class="menu_button iig-styles-toolbar-btn" title="${t`Browse styles from site`}"><i class="fa-solid fa-globe"></i> ${t`Browse`}</div>`
+            : '';
+        const bodyHtml = `<div class="iig-settings-card iig-styles-card">
+            <div class="iig-styles-toolbar">
+                ${browseBtn}
+                <input type="text" id="${id('new_name')}" class="text_pole flex1" placeholder="${t`New preset name…`}">
+                <div id="${id('add_btn')}" class="menu_button iig-styles-toolbar-btn"><i class="fa-solid fa-plus"></i></div>
+                <div id="${id('tags_toggle')}" class="menu_button iig-styles-toolbar-btn" title="${t`Manage tags`}"><i class="fa-solid fa-tags"></i></div>
             </div>
-            <textarea id="iig_style_value" class="text_pole iig-style-editor-textarea" rows="3" placeholder="masterpiece, cinematic lighting, painterly">${sanitizeForHtml(activeStyle.value)}</textarea>
-            ${editorTagsHtml ? `<div class="iig-style-editor-tags">${editorTagsHtml}</div>` : ''}
-        </div>
-    `;
+            <div id="${id('tag_manager')}" class="iig-hidden"></div>
+            <div id="${id('presets')}" class="iig-style-list"></div>
+            <div id="${id('editor')}"></div>
+        </div>`;
+        return buildSettingsSectionHtml(id('section'), sectionTitle, bodyHtml, false);
+    }
+
+    function bindEvents(settings) {
+        if (showBrowse) {
+            document.getElementById(id('pick_site'))?.addEventListener('click', () => openStylePickerModal());
+        }
+
+        document.getElementById(id('add_btn'))?.addEventListener('click', () => {
+            const input = document.getElementById(id('new_name'));
+            createFn(input?.value || '');
+            if (input) input.value = '';
+            vs.page = 0; vs.sort = 'newest'; vs.filter = 'all'; vs.filterTag = '';
+            saveSettings(); render();
+        });
+
+        document.getElementById(id('new_name'))?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); document.getElementById(id('add_btn'))?.click(); }
+        });
+
+        document.getElementById(id('tags_toggle'))?.addEventListener('click', () => {
+            const mgr = document.getElementById(id('tag_manager'));
+            if (!mgr) return;
+            const wasHidden = mgr.classList.contains('iig-hidden');
+            mgr.classList.toggle('iig-hidden', !wasHidden);
+            if (wasHidden) mgr.innerHTML = buildTagManagerHtml(settings);
+        });
+
+        document.getElementById(id('tag_manager'))?.addEventListener('click', (e) => {
+            const tgt = e.target instanceof Element ? e.target : null;
+            if (!tgt) return;
+            const rmBtn = tgt.closest('[data-ps-remove-tag]');
+            if (rmBtn) {
+                const tagName = rmBtn.getAttribute('data-ps-remove-tag') || '';
+                removeStyleTag(tagName, settings);
+                if (vs.filterTag === tagName) vs.filterTag = '';
+                saveSettings(); render();
+                const mgr = document.getElementById(id('tag_manager'));
+                if (mgr) mgr.innerHTML = buildTagManagerHtml(settings);
+                return;
+            }
+            if (tgt.closest('[data-ps-add-tag]')) {
+                const input = document.getElementById(id('tag_manager'))?.querySelector('[data-ps-new-tag]');
+                if (input instanceof HTMLInputElement && input.value.trim()) {
+                    addStyleTag(input.value.trim(), settings);
+                    input.value = '';
+                    saveSettings(); render();
+                    const mgr = document.getElementById(id('tag_manager'));
+                    if (mgr) mgr.innerHTML = buildTagManagerHtml(settings);
+                }
+                return;
+            }
+        });
+
+        document.getElementById(id('tag_manager'))?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.hasAttribute('data-ps-new-tag')) {
+                e.preventDefault();
+                document.getElementById(id('tag_manager'))?.querySelector('[data-ps-add-tag]')?.click();
+            }
+        });
+
+        const listEl = document.getElementById(id('presets'));
+
+        listEl?.addEventListener('click', (e) => {
+            const tgt = e.target instanceof Element ? e.target : null;
+            if (!tgt) return;
+
+            const fav = tgt.closest('[data-ps-fav]');
+            if (fav) { toggleFavoriteFn(fav.getAttribute('data-ps-fav')); saveSettings(); render(); return; }
+
+            const tog = tgt.closest('[data-ps-toggle-enabled]');
+            if (tog) {
+                const tid = tog.getAttribute('data-ps-toggle-enabled') || '';
+                const item = ensureFn(settings).find(x => x.id === tid);
+                if (item) { updateFn(tid, { enabled: !item.enabled }); saveSettings(); render(); }
+                return;
+            }
+
+            const act = tgt.closest('[data-ps-activate]');
+            if (act) {
+                const aid = act.getAttribute('data-ps-activate') || '';
+                settings[activeIdKey] = aid === settings[activeIdKey] ? '' : aid;
+                saveSettings(); render(); return;
+            }
+
+            if (tgt.closest('[data-ps-deactivate]')) { settings[activeIdKey] = ''; saveSettings(); render(); return; }
+
+            const rm = tgt.closest('[data-ps-remove]');
+            if (rm) { removeFn(rm.getAttribute('data-ps-remove')); saveSettings(); render(); return; }
+
+            const pg = tgt.closest('[data-ps-page]');
+            if (pg) { vs.page = parseInt(pg.getAttribute('data-ps-page'), 10) || 0; render(); return; }
+            if (tgt.closest('[data-ps-page-prev]')) { if (vs.page > 0) { vs.page--; render(); } return; }
+            if (tgt.closest('[data-ps-page-next]')) {
+                const tp = Math.max(1, Math.ceil(getSortedFiltered(settings).length / PRESETS_PER_PAGE));
+                if (vs.page < tp - 1) { vs.page++; render(); } return;
+            }
+            if (tgt.closest('[data-ps-filter-all]')) { vs.filter = 'all'; vs.filterTag = ''; vs.page = 0; render(); return; }
+            if (tgt.closest('[data-ps-filter-fav]')) { vs.filter = vs.filter === 'favorites' ? 'all' : 'favorites'; vs.page = 0; render(); return; }
+            const tagC = tgt.closest('[data-ps-filter-tag]');
+            if (tagC) { const tn = tagC.getAttribute('data-ps-filter-tag') || ''; vs.filterTag = vs.filterTag === tn ? '' : tn; vs.page = 0; render(); return; }
+        });
+
+        listEl?.addEventListener('change', (e) => {
+            if (e.target instanceof HTMLSelectElement && e.target.hasAttribute('data-ps-sort')) {
+                vs.sort = e.target.value; vs.page = 0; render();
+            }
+        });
+
+        document.getElementById(id('editor'))?.addEventListener('input', (e) => {
+            const active = getActiveFn(settings);
+            if (!active) return;
+            const tgt = e.target;
+            if (!(tgt instanceof HTMLInputElement || tgt instanceof HTMLTextAreaElement)) return;
+            if (tgt.hasAttribute('data-ps-name')) {
+                updateFn(active.id, { name: tgt.value }); saveSettings();
+                const nameEl = document.querySelector(`[data-ps-id="${active.id}"] .iig-style-item-name`);
+                if (nameEl) nameEl.textContent = getActiveFn(settings)?.name || tgt.value.trim() || active.name;
+                return;
+            }
+            if (tgt.hasAttribute('data-ps-value')) {
+                updateFn(active.id, { value: tgt.value }); saveSettings();
+                const prev = document.querySelector(`[data-ps-id="${active.id}"] .iig-style-item-preview`);
+                if (prev) prev.textContent = truncatePresetValue(tgt.value);
+                return;
+            }
+        });
+
+        document.getElementById(id('editor'))?.addEventListener('click', (e) => {
+            const tgt = e.target instanceof Element ? e.target : null;
+            if (!tgt) return;
+            const edTag = tgt.closest('[data-ps-editor-tag]');
+            if (edTag) {
+                const active = getActiveFn(settings);
+                if (!active) return;
+                const tagName = edTag.getAttribute('data-ps-editor-tag') || '';
+                const tags = (active.tags || []).slice();
+                const idx = tags.indexOf(tagName);
+                if (idx === -1) tags.push(tagName); else tags.splice(idx, 1);
+                updateFn(active.id, { tags }); saveSettings(); render();
+            }
+        });
+    }
+
+    return { render, buildSectionHtml, bindEvents, viewState: vs };
 }
+
+// ----- Preset section instances -----
+
+const styleSection = createPresetSectionUI({
+    p: 'style', sectionTitle: t`Styles`,
+    valuePlaceholder: 'masterpiece, cinematic lighting, painterly',
+    showBrowse: true,
+    ensureFn: ensureStyles, createFn: createStyle, getActiveFn: getActiveStyle,
+    updateFn: updateStyle, removeFn: removeStyle, toggleFavoriteFn: toggleStyleFavorite,
+    activeIdKey: 'activeStyleId',
+});
+
+const prefixSection = createPresetSectionUI({
+    p: 'prefix', sectionTitle: t`Prefixes`,
+    valuePlaceholder: 'photorealistic 8K RAW photo, ',
+    showBrowse: false,
+    ensureFn: ensurePrefixes, createFn: createPrefix, getActiveFn: getActivePrefix,
+    updateFn: updatePrefix, removeFn: removePrefix, toggleFavoriteFn: togglePrefixFavorite,
+    activeIdKey: 'activePrefixId',
+});
+
+const suffixSection = createPresetSectionUI({
+    p: 'suffix', sectionTitle: t`Suffixes`,
+    valuePlaceholder: ', sharp focus, ultra detailed, no artifacts',
+    showBrowse: false,
+    ensureFn: ensureSuffixes, createFn: createSuffix, getActiveFn: getActiveSuffix,
+    updateFn: updateSuffix, removeFn: removeSuffix, toggleFavoriteFn: toggleSuffixFavorite,
+    activeIdKey: 'activeSuffixId',
+});
+
+const novelaiPresetSection = createPresetSectionUI({
+    p: 'nai_preset', sectionTitle: t`NovelAI Presets`,
+    valuePlaceholder: '1girl, long white hair, purple eyes, school uniform',
+    showBrowse: false, multiActive: true,
+    ensureFn: ensureNovelaiPresets, createFn: createNovelaiPreset, getActiveFn: getActiveNovelaiPreset,
+    updateFn: updateNovelaiPreset, removeFn: removeNovelaiPreset, toggleFavoriteFn: toggleNovelaiPresetFavorite,
+    activeIdKey: 'activeNovelaiPresetId',
+});
 
 export function renderStyleSettings() {
-    const settings = getSettings();
-    const listContainer = document.getElementById('iig_style_presets');
-    const editorContainer = document.getElementById('iig_style_editor');
-    if (listContainer) {
-        listContainer.innerHTML = buildStyleListHtml(settings);
-    }
-    if (editorContainer) {
-        editorContainer.innerHTML = buildStyleEditorHtml(settings);
-    }
-    const tagManagerContainer = document.getElementById('iig_style_tag_manager');
-    if (tagManagerContainer) {
-        tagManagerContainer.innerHTML = buildStyleTagsManagerHtml(settings);
-    }
+    styleSection.render();
+    prefixSection.render();
+    suffixSection.render();
+    novelaiPresetSection.render();
 }
 
 const IIG_STYLE_SOURCE_URL = 'https://wewwaistyping.github.io/slayimagespromts/';
@@ -1006,29 +1156,6 @@ async function openStylePickerModal() {
             button.classList.remove('is-loading');
         }
     });
-}
-
-function buildStylesSettingsSectionHtml() {
-    const bodyHtml = `
-        <div class="iig-settings-card iig-styles-card">
-            <div class="iig-styles-toolbar">
-                <div id="iig_style_pick_site" class="menu_button iig-styles-toolbar-btn" title="${t`Parse and choose style from the site`}">
-                    <i class="fa-solid fa-globe"></i> ${t`Browse`}
-                </div>
-                <input type="text" id="iig_new_style_name" class="text_pole flex1" placeholder="${t`New style name…`}">
-                <div id="iig_style_add" class="menu_button iig-styles-toolbar-btn" title="${t`Add style`}">
-                    <i class="fa-solid fa-plus"></i>
-                </div>
-                <div id="iig_style_tags_manage_toggle" class="menu_button iig-styles-toolbar-btn" title="${t`Manage tags`}">
-                    <i class="fa-solid fa-tags"></i>
-                </div>
-            </div>
-            <div id="iig_style_tag_manager" class="iig-hidden"></div>
-            <div id="iig_style_presets" class="iig-style-list"></div>
-            <div id="iig_style_editor"></div>
-        </div>
-    `;
-    return buildSettingsSectionHtml('iig_styles_section', t`Styles`, bodyHtml, false);
 }
 
 // ----- References section -----
@@ -1383,106 +1510,7 @@ function buildReferencesSettingsSectionHtml(settings = getSettings()) {
     return buildSettingsSectionHtml('iig_references_section', t`References`, bodyHtml, true);
 }
 
-// ----- NovelAI Presets section -----
-
-function buildPresetRowHtml(preset) {
-    return `
-        <div class="iig-preset-row" data-preset-id="${sanitizeForHtml(preset.id)}">
-            <div class="iig-preset-fields">
-                <input type="text" class="text_pole iig-preset-name" value="${sanitizeForHtml(preset.name)}" placeholder="${t`Имя / триггер (напр. Yukari)`}">
-                <input type="text" class="text_pole iig-preset-tags" value="${sanitizeForHtml(preset.tags)}" placeholder="${t`Теги замены (напр. 1girl, long white hair, purple eyes)`}">
-            </div>
-            <div class="menu_button iig-preset-remove" data-preset-remove="${sanitizeForHtml(preset.id)}" title="${t`Delete preset`}">
-                <i class="fa-solid fa-trash"></i>
-            </div>
-        </div>
-    `;
-}
-
-function buildPresetsListHtml(settings = getSettings()) {
-    const presets = ensureNovelaiPresets(settings);
-    if (presets.length === 0) {
-        return `<p class="hint">${t`Нет заготовок. Добавьте пресет, чтобы имена в промпте заменялись на теги с описанием внешности.`}</p>`;
-    }
-    return presets.map(buildPresetRowHtml).join('');
-}
-
-function buildPresetsSettingsSectionHtml(settings = getSettings()) {
-    const isNovelAI = settings.apiType === 'novelai';
-    const bodyHtml = `
-        <div class="iig-settings-card">
-            <p class="hint">${t`NovelAI не поддерживает отправку референсов. Для закрепления внешности персонажей можно воспользоваться пресетом-заготовкой: укажите имя персонажа как триггер, а в тегах — описание внешности. При генерации имя в промпте автоматически заменится на теги. Регистр не важен, совпадение по целому слову.`}</p>
-            <div id="iig_presets_list">${buildPresetsListHtml(settings)}</div>
-            <div id="iig_preset_add" class="menu_button iig-button-inline" style="width: 100%; margin-top: 8px;">
-                <i class="fa-solid fa-plus"></i> ${t`Add preset`}
-            </div>
-        </div>
-    `;
-    return `
-        <div class="${isNovelAI ? '' : 'iig-hidden'}" id="iig_presets_section_wrapper">
-            ${buildSettingsSectionHtml('iig_presets_section', t`Presets`, bodyHtml, true)}
-        </div>
-    `;
-}
-
-function renderPresetsList() {
-    const container = document.getElementById('iig_presets_list');
-    if (!container) return;
-    container.innerHTML = buildPresetsListHtml();
-    bindPresetRowEvents();
-}
-
-function bindPresetRowEvents() {
-    const container = document.getElementById('iig_presets_list');
-    if (!container) return;
-    const settings = getSettings();
-
-    container.querySelectorAll('.iig-preset-name').forEach((input) => {
-        input.addEventListener('input', (e) => {
-            const row = e.target.closest('.iig-preset-row');
-            const id = row?.getAttribute('data-preset-id');
-            if (id) {
-                updateNovelaiPreset(id, { name: e.target.value }, settings);
-                saveSettings();
-            }
-        });
-    });
-
-    container.querySelectorAll('.iig-preset-tags').forEach((input) => {
-        input.addEventListener('input', (e) => {
-            const row = e.target.closest('.iig-preset-row');
-            const id = row?.getAttribute('data-preset-id');
-            if (id) {
-                updateNovelaiPreset(id, { tags: e.target.value }, settings);
-                saveSettings();
-            }
-        });
-    });
-
-    container.querySelectorAll('.iig-preset-remove').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-            const id = btn.getAttribute('data-preset-remove');
-            if (id) {
-                removeNovelaiPreset(id, settings);
-                saveSettings();
-                renderPresetsList();
-            }
-        });
-    });
-}
-
-function bindPresetsEvents(settings) {
-    document.getElementById('iig_preset_add')?.addEventListener('click', () => {
-        addNovelaiPreset('', '', settings);
-        saveSettings();
-        renderPresetsList();
-        const list = document.getElementById('iig_presets_list');
-        const lastRow = list?.querySelector('.iig-preset-row:last-child .iig-preset-name');
-        if (lastRow instanceof HTMLInputElement) lastRow.focus();
-    });
-
-    bindPresetRowEvents();
-}
+// Old NovelAI presets section removed — handled by createPresetSectionUI factory (novelaiPresetSection)
 
 // ----- Debug section -----
 
@@ -1717,7 +1745,7 @@ function applyProfileValuesToInputs(settings) {
     setChk('iig_novelai_sm_dyn', settings.novelaiSmDyn);
 
     // Re-render presets list (it's data-driven, not simple value sync).
-    renderPresetsList();
+    novelaiPresetSection.render();
 
     setChk('iig_send_char_avatar', settings.sendCharAvatar);
     setChk('iig_send_user_avatar', settings.sendUserAvatar);
@@ -2264,232 +2292,7 @@ function bindAvatarDropdownToggles() {
 
 // ----- Styles section events -----
 
-function bindStylesSectionEvents(settings) {
-    document.getElementById('iig_style_pick_site')?.addEventListener('click', () => {
-        openStylePickerModal();
-    });
-
-    document.getElementById('iig_style_add')?.addEventListener('click', () => {
-        const input = document.getElementById('iig_new_style_name');
-        const style = createStyle(input?.value || '');
-        if (input) input.value = '';
-        styleViewState.page = 0;
-        if (styleViewState.sort !== 'newest') styleViewState.sort = 'newest';
-        if (styleViewState.filter === 'favorites') styleViewState.filter = 'all';
-        styleViewState.filterTag = '';
-        saveSettings();
-        renderStyleSettings();
-        iigLog('INFO', `Created style: ${style.name}`);
-    });
-
-    document.getElementById('iig_new_style_name')?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            document.getElementById('iig_style_add')?.click();
-        }
-    });
-
-    // Tag manager toggle
-    document.getElementById('iig_style_tags_manage_toggle')?.addEventListener('click', () => {
-        const mgr = document.getElementById('iig_style_tag_manager');
-        if (!mgr) return;
-        const wasHidden = mgr.classList.contains('iig-hidden');
-        mgr.classList.toggle('iig-hidden', !wasHidden);
-        if (wasHidden) {
-            mgr.innerHTML = buildStyleTagsManagerHtml(settings);
-        }
-    });
-
-    // Tag manager delegated events
-    document.getElementById('iig_style_tag_manager')?.addEventListener('click', (e) => {
-        const target = e.target instanceof Element ? e.target : null;
-        if (!target) return;
-
-        const removeBtn = target.closest('[data-remove-style-tag]');
-        if (removeBtn) {
-            const tagName = removeBtn.getAttribute('data-remove-style-tag') || '';
-            removeStyleTag(tagName, settings);
-            if (styleViewState.filterTag === tagName) styleViewState.filterTag = '';
-            saveSettings();
-            renderStyleSettings();
-            const mgr = document.getElementById('iig_style_tag_manager');
-            if (mgr) mgr.innerHTML = buildStyleTagsManagerHtml(settings);
-            return;
-        }
-
-        if (target.closest('#iig_style_tag_add_btn')) {
-            const input = document.getElementById('iig_new_style_tag');
-            if (input instanceof HTMLInputElement && input.value.trim()) {
-                addStyleTag(input.value.trim(), settings);
-                input.value = '';
-                saveSettings();
-                renderStyleSettings();
-                const mgr = document.getElementById('iig_style_tag_manager');
-                if (mgr) mgr.innerHTML = buildStyleTagsManagerHtml(settings);
-            }
-            return;
-        }
-    });
-
-    document.getElementById('iig_style_tag_manager')?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.id === 'iig_new_style_tag') {
-            e.preventDefault();
-            document.getElementById('iig_style_tag_add_btn')?.click();
-        }
-    });
-
-    const presetsContainer = document.getElementById('iig_style_presets');
-
-    presetsContainer?.addEventListener('click', (e) => {
-        const target = e.target instanceof Element ? e.target : null;
-        if (!target) return;
-
-        const favButton = target.closest('[data-style-fav]');
-        if (favButton) {
-            const styleId = favButton.getAttribute('data-style-fav') || '';
-            toggleStyleFavorite(styleId);
-            saveSettings();
-            renderStyleSettings();
-            return;
-        }
-
-        const activateButton = target.closest('[data-style-activate]');
-        if (activateButton) {
-            const id = activateButton.getAttribute('data-style-activate') || '';
-            settings.activeStyleId = id === settings.activeStyleId ? '' : id;
-            saveSettings();
-            renderStyleSettings();
-            return;
-        }
-
-        const deactivateButton = target.closest('[data-style-deactivate]');
-        if (deactivateButton) {
-            settings.activeStyleId = '';
-            saveSettings();
-            renderStyleSettings();
-            return;
-        }
-
-        const removeButton = target.closest('[data-style-remove]');
-        if (removeButton) {
-            const styleId = removeButton.getAttribute('data-style-remove') || '';
-            removeStyle(styleId);
-            saveSettings();
-            renderStyleSettings();
-            return;
-        }
-
-        const pageBtn = target.closest('[data-style-page]');
-        if (pageBtn) {
-            styleViewState.page = parseInt(pageBtn.getAttribute('data-style-page'), 10) || 0;
-            renderStyleSettings();
-            return;
-        }
-
-        if (target.closest('[data-style-page-prev]')) {
-            if (styleViewState.page > 0) {
-                styleViewState.page--;
-                renderStyleSettings();
-            }
-            return;
-        }
-
-        if (target.closest('[data-style-page-next]')) {
-            const allSorted = getSortedFilteredStyles(settings);
-            const totalPages = Math.max(1, Math.ceil(allSorted.length / STYLES_PER_PAGE));
-            if (styleViewState.page < totalPages - 1) {
-                styleViewState.page++;
-                renderStyleSettings();
-            }
-            return;
-        }
-
-        if (target.closest('#iig_style_filter_all')) {
-            styleViewState.filter = 'all';
-            styleViewState.filterTag = '';
-            styleViewState.page = 0;
-            renderStyleSettings();
-            return;
-        }
-
-        if (target.closest('#iig_style_filter_fav')) {
-            styleViewState.filter = styleViewState.filter === 'favorites' ? 'all' : 'favorites';
-            styleViewState.page = 0;
-            renderStyleSettings();
-            return;
-        }
-
-        const tagChip = target.closest('[data-style-filter-tag]');
-        if (tagChip) {
-            const tag = tagChip.getAttribute('data-style-filter-tag') || '';
-            styleViewState.filterTag = styleViewState.filterTag === tag ? '' : tag;
-            styleViewState.page = 0;
-            renderStyleSettings();
-            return;
-        }
-    });
-
-    presetsContainer?.addEventListener('change', (e) => {
-        const target = e.target;
-        if (target instanceof HTMLSelectElement && target.id === 'iig_style_sort') {
-            styleViewState.sort = target.value;
-            styleViewState.page = 0;
-            renderStyleSettings();
-        }
-    });
-
-    // Style editor — input for name/value
-    document.getElementById('iig_style_editor')?.addEventListener('input', (e) => {
-        const activeStyle = getActiveStyle(settings);
-        if (!activeStyle) return;
-
-        const target = e.target;
-        if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
-
-        if (target.id === 'iig_style_name') {
-            updateStyle(activeStyle.id, { name: target.value });
-            saveSettings();
-            const nameEl = document.querySelector(`[data-style-id="${activeStyle.id}"] .iig-style-item-name`);
-            if (nameEl) {
-                nameEl.textContent = getActiveStyle(settings)?.name || target.value.trim() || activeStyle.name;
-            }
-            return;
-        }
-        if (target.id === 'iig_style_value') {
-            updateStyle(activeStyle.id, { value: target.value });
-            saveSettings();
-            const previewEl = document.querySelector(`[data-style-id="${activeStyle.id}"] .iig-style-item-preview`);
-            if (previewEl) {
-                previewEl.textContent = truncateStyleValue(target.value);
-            }
-            return;
-        }
-    });
-
-    // Style editor — tag assignment toggle
-    document.getElementById('iig_style_editor')?.addEventListener('click', (e) => {
-        const target = e.target instanceof Element ? e.target : null;
-        if (!target) return;
-
-        const editorTag = target.closest('[data-editor-tag]');
-        if (editorTag) {
-            const activeStyle = getActiveStyle(settings);
-            if (!activeStyle) return;
-            const tagName = editorTag.getAttribute('data-editor-tag') || '';
-            const tags = activeStyle.tags ? activeStyle.tags.slice() : [];
-            const idx = tags.indexOf(tagName);
-            if (idx === -1) {
-                tags.push(tagName);
-            } else {
-                tags.splice(idx, 1);
-            }
-            updateStyle(activeStyle.id, { tags });
-            saveSettings();
-            renderStyleSettings();
-            return;
-        }
-    });
-}
+// bindStylesSectionEvents removed — handled by createPresetSectionUI factory
 
 // ----- Lorebook bar events -----
 
@@ -2976,6 +2779,7 @@ function buildUpdateVisibility(settings) {
         const isOpenRouter = apiType === 'openrouter';
         const isElectronHub = apiType === 'electronhub';
         const isVoid = apiType === 'void';
+        const isAIGate = apiType === 'aigate';
         const isNovelAI = apiType === 'novelai';
 
         // Поддерживает ли активный провайдер референсы (учитывая модель).
@@ -2987,7 +2791,7 @@ function buildUpdateVisibility(settings) {
         // показывается не только для Gemini, но и для любого OpenAI-семейства,
         // которое поддерживает /edits, и для OpenRouter/Electron Hub. Naistera
         // использует свой отдельный блок.
-        const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid) && refsSupported;
+        const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid || isAIGate) && refsSupported;
 
         // Model is used for OpenAI and Gemini; Naistera and NovelAI have their own selectors.
         document.getElementById('iig_model_row')?.classList.toggle('iig-hidden', isNaistera || isNovelAI);
@@ -3039,7 +2843,7 @@ function buildUpdateVisibility(settings) {
 
         const avatarSection = document.getElementById('iig_avatar_section');
         if (avatarSection) {
-            avatarSection.classList.toggle('iig-hidden', !(isGemini || isOpenRouter || isVoid));
+            avatarSection.classList.toggle('iig-hidden', !(isGemini || isOpenRouter || isVoid || isAIGate));
         }
 
         // «Общий» avatar refs блок — для Gemini / OpenAI-c-refs / OpenRouter.
@@ -3053,6 +2857,7 @@ function buildUpdateVisibility(settings) {
                 if (isOpenRouter) titleEl.textContent = 'OpenRouter';
                 else if (isElectronHub) titleEl.textContent = 'Electron Hub';
                 else if (isVoid) titleEl.textContent = 'VoidAI / RouteMyAI';
+                else if (isAIGate) titleEl.textContent = 'AIGate';
                 else if (isOpenAI) titleEl.textContent = 'OpenAI / GPT Image';
                 else titleEl.textContent = 'Gemini / nano-banana';
             }
@@ -3103,11 +2908,13 @@ function bindSettingsEvents() {
     });
 
     bindAvatarDropdownToggles();
-    bindStylesSectionEvents(settings);
+    styleSection.bindEvents(settings);
+    prefixSection.bindEvents(settings);
+    suffixSection.bindEvents(settings);
     bindLorebookBarEvents(settings);
     bindAdditionalReferencesEvents(settings);
     bindRefInstructionEvents(settings);
-    bindPresetsEvents(settings);
+    novelaiPresetSection.bindEvents(settings);
     bindDebugSectionEvents(settings);
 
     // Apply initial state
@@ -3570,9 +3377,14 @@ export function createSettingsUI() {
             <div class="inline-drawer-content">
                 <div class="iig-settings">
                     ${buildApiSettingsSectionHtml(settings)}
-                    ${buildStylesSettingsSectionHtml(settings)}
+                    ${styleSection.buildSectionHtml()}
+                    ${prefixSection.buildSectionHtml()}
+                    ${suffixSection.buildSectionHtml()}
                     ${buildReferencesSettingsSectionHtml(settings)}
-                    ${buildPresetsSettingsSectionHtml(settings)}
+                    <div id="iig_presets_section_wrapper" class="${settings.apiType === 'novelai' ? '' : 'iig-hidden'}">
+                        <p class="hint" style="margin: 8px 0 4px;">${t`Name = trigger word, Value = replacement tags. Case-insensitive whole-word match.`}</p>
+                        ${novelaiPresetSection.buildSectionHtml()}
+                    </div>
                     ${buildDebugSettingsSectionHtml(settings)}
                 </div>
             </div>

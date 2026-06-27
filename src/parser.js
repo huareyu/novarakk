@@ -14,6 +14,8 @@
 import {
     getSettings,
     getActiveStyle,
+    getActivePrefix,
+    getActiveSuffix,
     getAllEnabledLorebookReferences,
     normalizeGroupName,
     iigLog,
@@ -263,8 +265,14 @@ export function buildAdditionalReferencesPromptBlock(matchedRefs = []) {
 }
 
 export function buildFinalGenerationPrompt(prompt, style, matchedAdditionalRefs = [], settings = getSettings()) {
+    const prefixValue = String(getActivePrefix(settings)?.value || '').trim();
+    const suffixValue = String(getActiveSuffix(settings)?.value || '').trim();
+    let desc = String(prompt || '').trim();
+    if (prefixValue) desc = `${prefixValue} ${desc}`;
+    if (suffixValue) desc = `${desc} ${suffixValue}`;
+
     const effectiveStyle = resolveEffectiveStyle(style, settings);
-    let fullPrompt = injectStyleBlock(prompt, effectiveStyle);
+    let fullPrompt = injectStyleBlock(desc, effectiveStyle);
 
     const additionalReferencesBlock = buildAdditionalReferencesPromptBlock(matchedAdditionalRefs);
     if (additionalReferencesBlock) {

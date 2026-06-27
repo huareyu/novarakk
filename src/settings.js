@@ -69,7 +69,11 @@ export const defaultSettings = Object.freeze({
     imageContextCount: 1,
     styles: [],
     activeStyleId: '',
-    styleTags: ['GPT', 'Nano Banana', 'NovelAI'],
+    prefixes: [],
+    activePrefixId: '',
+    suffixes: [],
+    activeSuffixId: '',
+    styleTags: ['GPT', 'Nano Banana', 'NovelAI', 'character', 'girl', 'boy', 'lighting'],
     apiType: 'openai', // 'openai' | 'gemini' | 'openrouter' | 'electronhub' | 'naistera' | 'void' | 'novelai'
     endpoint: '',
     /**
@@ -121,8 +125,8 @@ export const defaultSettings = Object.freeze({
     novelaiSm: false,
     novelaiSmDyn: false,
     // NovelAI tag presets — text substitutions for character/object names in prompts.
-    // Each: { id, name (trigger word), tags (replacement text) }
     novelaiPresets: [],
+    activeNovelaiPresetId: '',
     // Устаревшее поле: хранилось плоским массивом до v2.0-D.1. Сейчас это
     // refs первого лорбука. При старте `migrateAdditionalReferencesToLorebook`
     // перекладывает его в `lorebooks[0]` и очищает здесь.
@@ -227,7 +231,6 @@ export const CONNECTION_FIELDS = Object.freeze([
     'novelaiVarietyBoost',
     'novelaiSm',
     'novelaiSmDyn',
-    'novelaiPresets',
 ]);
 
 function makeProfileId() {
@@ -408,6 +411,7 @@ export const DEFAULT_ENDPOINTS = Object.freeze({
     openrouter: 'https://openrouter.ai/api/v1',
     electronhub: 'https://api.electronhub.ai',
     void: 'https://api.voidai.app',
+    aigate: 'https://api.aigate.shop',
 });
 
 export const ENDPOINT_PLACEHOLDERS = Object.freeze({
@@ -417,6 +421,7 @@ export const ENDPOINT_PLACEHOLDERS = Object.freeze({
     electronhub: 'https://api.electronhub.ai',
     naistera: 'https://naistera.org',
     void: 'https://api.voidai.app',
+    aigate: 'https://api.aigate.shop',
 });
 
 // ----- Settings accessors -----
@@ -438,6 +443,8 @@ export function getSettings() {
             context.extensionSettings[MODULE_NAME][key] = defaultSettings[key];
         }
     }
+
+    migrateNovelaiPresetsFormat(context.extensionSettings[MODULE_NAME]);
 
     return context.extensionSettings[MODULE_NAME];
 }
@@ -517,53 +524,31 @@ export function shouldTriggerNaisteraVideoForMessage(messageId, everyN) {
 
 // ----- NovelAI presets helpers -----
 
-function makeNovelaiPresetId() {
-    return `iig-nai-preset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-export function ensureNovelaiPresets(settings = getSettings()) {
-    if (!Array.isArray(settings.novelaiPresets)) {
-        settings.novelaiPresets = [];
+/**
+ * Migration: old presets had { id, name, tags: string } where `tags` was
+ * the replacement text. New format uses `value` for content and `tags` as
+ * classification array (like styles). Run before factory ensure.
+ */
+export function migrateNovelaiPresetsFormat(settings = getSettings()) {
+    if (!Array.isArray(settings.novelaiPresets)) return;
+    let migrated = false;
+    for (const raw of settings.novelaiPresets) {
+        if (!raw || typeof raw !== 'object') continue;
+        if (typeof raw.tags === 'string' && !Object.hasOwn(raw, 'value')) {
+            raw.value = raw.tags;
+            raw.tags = [];
+            raw.favorite = false;
+            raw.createdAt = raw.createdAt || 0;
+            migrated = true;
+        }
     }
-    settings.novelaiPresets = settings.novelaiPresets.map((raw) => ({
-        id: String(raw?.id || '').trim() || makeNovelaiPresetId(),
-        name: String(raw?.name || '').trim(),
-        tags: String(raw?.tags || '').trim(),
-    }));
-    return settings.novelaiPresets;
-}
-
-export function addNovelaiPreset(name = '', tags = '', settings = getSettings()) {
-    const presets = ensureNovelaiPresets(settings);
-    const preset = {
-        id: makeNovelaiPresetId(),
-        name: String(name).trim(),
-        tags: String(tags).trim(),
-    };
-    presets.push(preset);
-    return preset;
-}
-
-export function removeNovelaiPreset(presetId, settings = getSettings()) {
-    const presets = ensureNovelaiPresets(settings);
-    const index = presets.findIndex((p) => p.id === presetId);
-    if (index === -1) return false;
-    presets.splice(index, 1);
-    return true;
-}
-
-export function updateNovelaiPreset(presetId, patch, settings = getSettings()) {
-    const preset = ensureNovelaiPresets(settings).find((p) => p.id === presetId);
-    if (!preset) return null;
-    if (Object.hasOwn(patch, 'name')) preset.name = String(patch.name || '').trim();
-    if (Object.hasOwn(patch, 'tags')) preset.tags = String(patch.tags || '').trim();
-    return preset;
+    if (migrated) iigLog('INFO', 'Migrated NovelAI presets to new format (tags string → value)');
 }
 
 /**
  * Applies preset substitutions to a prompt string.
  * For each preset, replaces occurrences of the trigger word (case-insensitive,
- * whole word) with the preset's tags.
+ * whole word) with the preset's value (replacement text).
  */
 export function applyNovelaiPresets(prompt, settings = getSettings()) {
     const presets = ensureNovelaiPresets(settings);
@@ -571,10 +556,10 @@ export function applyNovelaiPresets(prompt, settings = getSettings()) {
 
     let result = prompt;
     for (const preset of presets) {
-        if (!preset.name || !preset.tags) continue;
+        if (!preset.enabled || !preset.name || !preset.value) continue;
         const escaped = preset.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const regex = new RegExp(`\\b${escaped}\\b`, 'gi');
-        result = result.replace(regex, preset.tags);
+        result = result.replace(regex, preset.value);
     }
     return result;
 }
@@ -592,6 +577,7 @@ export function normalizeConfiguredEndpoint(apiType, endpoint) {
         if (apiType === 'void') return DEFAULT_ENDPOINTS.void;
         if (apiType === 'openrouter') return DEFAULT_ENDPOINTS.openrouter;
         if (apiType === 'electronhub') return DEFAULT_ENDPOINTS.electronhub;
+        if (apiType === 'aigate') return DEFAULT_ENDPOINTS.aigate;
         return '';
     }
     if (apiType === 'naistera') {
@@ -759,6 +745,111 @@ export function removeStyle(styleId) {
     }
     return true;
 }
+
+// ----- Generic preset CRUD factory (prefixes / suffixes) -----
+
+function makePresetOps(collectionKey, activeIdKey, label) {
+    function ensure(settings = getSettings()) {
+        if (!Array.isArray(settings[collectionKey])) {
+            settings[collectionKey] = [];
+        }
+        settings[collectionKey] = settings[collectionKey].map((raw, index) => ({
+            id: String(raw?.id || `iig-${collectionKey}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`),
+            name: String(raw?.name || `${label} ${index + 1}`).trim() || `${label} ${index + 1}`,
+            value: String(raw?.value ?? '').trim(),
+            favorite: raw?.favorite === true,
+            enabled: raw?.enabled !== false,
+            createdAt: Number.isFinite(raw?.createdAt) ? raw.createdAt : 0,
+            tags: Array.isArray(raw?.tags) ? raw.tags.filter((t2) => typeof t2 === 'string' && t2.trim()) : [],
+        }));
+        if (!settings[collectionKey].some((item) => item.id === settings[activeIdKey])) {
+            settings[activeIdKey] = '';
+        }
+        return settings[collectionKey];
+    }
+
+    function create(name = '') {
+        const settings = getSettings();
+        const items = ensure(settings);
+        const item = {
+            id: `iig-${collectionKey}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            name: String(name || '').trim() || `${label} ${items.length + 1}`,
+            value: '',
+            favorite: false,
+            enabled: true,
+            createdAt: Date.now(),
+            tags: [],
+        };
+        items.push(item);
+        settings[activeIdKey] = item.id;
+        return item;
+    }
+
+    function getActive(settings = getSettings()) {
+        const items = ensure(settings);
+        return items.find((item) => item.id === settings[activeIdKey]) || null;
+    }
+
+    function update(id, patch) {
+        const settings = getSettings();
+        const item = ensure(settings).find((i) => i.id === id);
+        if (!item) return null;
+        if (Object.hasOwn(patch, 'name')) item.name = String(patch.name || '').trim() || item.name;
+        if (Object.hasOwn(patch, 'value')) item.value = String(patch.value || '').trim();
+        if (Object.hasOwn(patch, 'favorite')) item.favorite = Boolean(patch.favorite);
+        if (Object.hasOwn(patch, 'enabled')) item.enabled = Boolean(patch.enabled);
+        if (Object.hasOwn(patch, 'tags') && Array.isArray(patch.tags)) {
+            item.tags = patch.tags.filter((t2) => typeof t2 === 'string' && t2.trim());
+        }
+        return item;
+    }
+
+    function remove(id) {
+        const settings = getSettings();
+        const items = ensure(settings);
+        const index = items.findIndex((i) => i.id === id);
+        if (index === -1) return false;
+        items.splice(index, 1);
+        if (settings[activeIdKey] === id) {
+            settings[activeIdKey] = items[0]?.id || '';
+        }
+        return true;
+    }
+
+    function toggleFavorite(id) {
+        const settings = getSettings();
+        const item = ensure(settings).find((i) => i.id === id);
+        if (!item) return null;
+        item.favorite = !item.favorite;
+        return item;
+    }
+
+    return { ensure, create, getActive, update, remove, toggleFavorite };
+}
+
+const _prefixOps = makePresetOps('prefixes', 'activePrefixId', 'Prefix');
+export const ensurePrefixes = _prefixOps.ensure;
+export const createPrefix = _prefixOps.create;
+export const getActivePrefix = _prefixOps.getActive;
+export const updatePrefix = _prefixOps.update;
+export const removePrefix = _prefixOps.remove;
+export const togglePrefixFavorite = _prefixOps.toggleFavorite;
+
+const _suffixOps = makePresetOps('suffixes', 'activeSuffixId', 'Suffix');
+export const ensureSuffixes = _suffixOps.ensure;
+export const createSuffix = _suffixOps.create;
+export const getActiveSuffix = _suffixOps.getActive;
+export const updateSuffix = _suffixOps.update;
+export const removeSuffix = _suffixOps.remove;
+export const toggleSuffixFavorite = _suffixOps.toggleFavorite;
+
+const _naiPresetOps = makePresetOps('novelaiPresets', 'activeNovelaiPresetId', 'NAI Preset');
+export const ensureNovelaiPresets = _naiPresetOps.ensure;
+export const createNovelaiPreset = _naiPresetOps.create;
+export const getActiveNovelaiPreset = _naiPresetOps.getActive;
+export const updateNovelaiPreset = _naiPresetOps.update;
+export const removeNovelaiPreset = _naiPresetOps.remove;
+export const toggleNovelaiPresetFavorite = _naiPresetOps.toggleFavorite;
 
 // ----- Last request snapshot (in-memory, NOT persisted) -----
 

@@ -488,7 +488,7 @@ export function buildAdditionalReferenceRowsHtml(settings = getSettings()) {
     const refs = ensureAdditionalReferencesArray(settings);
 
     if (refs.length === 0) {
-        return '<p class="hint">Пока пусто. Добавь референс с именем-триггером и картинкой.</p>';
+        return `<p class="hint">${t`No references yet. Add one above.`}</p>`;
     }
 
     const lastIndex = refs.length - 1;
@@ -497,7 +497,19 @@ export function buildAdditionalReferenceRowsHtml(settings = getSettings()) {
         const isAlways = ref.matchMode === 'always';
         const isEnabled = ref.enabled !== false;
         const useRegex = ref.useRegex === true;
-        const previewHtml = previewSrc
+        const isEmpty = !ref.name && !previewSrc;
+
+        const summaryThumb = previewSrc
+            ? `<img src="${sanitizeForHtml(previewSrc)}" class="iig-ref-summary-thumb">`
+            : `<div class="iig-ref-summary-thumb iig-ref-summary-thumb-empty"><i class="fa-solid fa-image"></i></div>`;
+
+        const displayName = ref.name || t`Unnamed reference`;
+        const badges = [];
+        badges.push(`<span class="iig-ref-badge ${isAlways ? 'iig-ref-badge-always' : 'iig-ref-badge-match'}">${isAlways ? t`Always` : t`Match`}</span>`);
+        if (useRegex) badges.push(`<span class="iig-ref-badge">${t`Regex`}</span>`);
+        if (ref.group) badges.push(`<span class="iig-ref-badge iig-ref-badge-group">${sanitizeForHtml(ref.group)}</span>`);
+
+        const bodyThumb = previewSrc
             ? `<img src="${sanitizeForHtml(previewSrc)}" alt="${sanitizeForHtml(ref.name || `ref-${index + 1}`)}" class="iig-additional-ref-thumb">`
             : `<div class="iig-additional-ref-thumb iig-additional-ref-thumb-placeholder">${t`none`}</div>`;
 
@@ -505,79 +517,88 @@ export function buildAdditionalReferenceRowsHtml(settings = getSettings()) {
         const isLast = index === lastIndex;
 
         return `
-            <div class="iig-additional-ref-row ${isEnabled ? '' : 'iig-additional-ref-row-disabled'}" data-ref-index="${index}">
-                <div class="iig-additional-ref-content">
-                    <div class="iig-additional-ref-preview">
-                        ${previewHtml}
-                        <label class="checkbox_label iig-additional-ref-enabled-toggle" title="${isEnabled ? t`Disable reference` : t`Enable reference`}">
-                            <input type="checkbox" class="iig-additional-ref-enabled" ${isEnabled ? 'checked' : ''}>
-                            <span></span>
-                        </label>
-                    </div>
-                    <div class="iig-additional-ref-main">
-                        <div class="iig-additional-ref-header">
-                            <input
-                                type="text"
-                                class="text_pole flex1 iig-additional-ref-name"
-                                placeholder="${t`Trigger name (or regex)`}"
-                                value="${sanitizeForHtml(ref.name || '')}"
-                            >
-                            <label class="menu_button iig-additional-ref-upload" title="${t`Upload image`}">
-                                <i class="fa-solid fa-upload"></i>
-                                <input type="file" accept="image/*" class="iig-additional-ref-file" style="display:none">
-                            </label>
-                            <div class="menu_button iig-additional-ref-upload-url" title="${t`Upload image by URL`}">
-                                <i class="fa-solid fa-link"></i>
-                            </div>
-                            <div class="menu_button iig-additional-ref-remove" title="${t`Delete`}">
-                                <i class="fa-solid fa-trash"></i>
-                            </div>
+            <div class="iig-additional-ref-row ${isEnabled ? '' : 'iig-additional-ref-row-disabled'} ${isEmpty ? 'iig-ref-expanded' : ''}" data-ref-index="${index}">
+                <div class="iig-ref-summary" data-ref-toggle>
+                    <div class="iig-ref-drag-handle" draggable="true" title="${t`Drag to reorder`}"><i class="fa-solid fa-grip-vertical"></i></div>
+                    ${summaryThumb}
+                    <span class="iig-ref-summary-name ${ref.name ? '' : 'iig-ref-summary-name-empty'}">${sanitizeForHtml(displayName)}</span>
+                    <div class="iig-ref-summary-badges">${badges.join('')}</div>
+                    <label class="checkbox_label iig-ref-summary-enabled" title="${isEnabled ? t`Disable reference` : t`Enable reference`}">
+                        <input type="checkbox" class="iig-additional-ref-enabled" ${isEnabled ? 'checked' : ''}>
+                        <span></span>
+                    </label>
+                    <div class="iig-ref-chevron"><i class="fa-solid fa-chevron-down"></i></div>
+                </div>
+                <div class="iig-ref-body">
+                    <div class="iig-additional-ref-content">
+                        <div class="iig-additional-ref-preview">
+                            ${bodyThumb}
                         </div>
-                        <textarea
-                            class="text_pole flex1 iig-additional-ref-description"
-                            rows="2"
-                            placeholder="${t`Reference description`}"
-                        >${sanitizeForHtml(ref.description || '')}</textarea>
-                        <div class="iig-additional-ref-lorebook-grid">
-                            <input
-                                type="text"
-                                class="text_pole iig-additional-ref-group"
-                                placeholder="${t`Group (e.g. characters, locations)`}"
-                                value="${sanitizeForHtml(ref.group || '')}"
-                            >
-                            <input
-                                type="text"
-                                class="text_pole iig-additional-ref-secondary"
-                                placeholder="${t`Secondary keys (AND, comma-separated)`}"
-                                value="${sanitizeForHtml(ref.secondaryKeys || '')}"
-                            >
-                            <input
-                                type="number"
-                                class="text_pole iig-additional-ref-priority"
-                                placeholder="${t`Priority`}"
-                                step="1"
-                                value="${Number.isFinite(ref.priority) ? ref.priority : 0}"
-                                title="${t`Higher priority is matched first when provider limits references`}"
-                            >
-                        </div>
-                        <div class="iig-additional-ref-footer">
-                            <label class="checkbox_label">
-                                <input type="checkbox" class="iig-additional-ref-always" ${isAlways ? 'checked' : ''}>
-                                <span>${isAlways ? t`Always send` : t`Send on match`}</span>
-                            </label>
-                            <label class="checkbox_label" title="${t`Interpret trigger as JS regex (e.g. /cat|kitten/i). Secondary keys remain literal.`}">
-                                <input type="checkbox" class="iig-additional-ref-regex" ${useRegex ? 'checked' : ''}>
-                                <span>${t`Regex`}</span>
-                            </label>
-                            <div class="menu_button iig-additional-ref-vision ${previewSrc ? '' : 'iig-hidden'}" title="${t`Generate description via Vision AI`}">
-                                <i class="fa-solid fa-robot"></i>
-                            </div>
-                            <div class="iig-additional-ref-move">
-                                <div class="menu_button iig-additional-ref-move-up ${isFirst ? 'disabled' : ''}" title="${t`Move up`}" ${isFirst ? 'aria-disabled="true"' : ''}>
-                                    <i class="fa-solid fa-arrow-up"></i>
+                        <div class="iig-additional-ref-main">
+                            <div class="iig-additional-ref-header">
+                                <input
+                                    type="text"
+                                    class="text_pole flex1 iig-additional-ref-name"
+                                    placeholder="${t`Trigger name (or regex)`}"
+                                    value="${sanitizeForHtml(ref.name || '')}"
+                                >
+                                <label class="menu_button iig-additional-ref-upload" title="${t`Upload image`}">
+                                    <i class="fa-solid fa-upload"></i>
+                                    <input type="file" accept="image/*" class="iig-additional-ref-file" style="display:none">
+                                </label>
+                                <div class="menu_button iig-additional-ref-upload-url" title="${t`Upload image by URL`}">
+                                    <i class="fa-solid fa-link"></i>
                                 </div>
-                                <div class="menu_button iig-additional-ref-move-down ${isLast ? 'disabled' : ''}" title="${t`Move down`}" ${isLast ? 'aria-disabled="true"' : ''}>
-                                    <i class="fa-solid fa-arrow-down"></i>
+                                <div class="menu_button iig-additional-ref-remove" title="${t`Delete`}">
+                                    <i class="fa-solid fa-trash"></i>
+                                </div>
+                            </div>
+                            <textarea
+                                class="text_pole flex1 iig-additional-ref-description"
+                                rows="2"
+                                placeholder="${t`Reference description`}"
+                            >${sanitizeForHtml(ref.description || '')}</textarea>
+                            <div class="iig-additional-ref-lorebook-grid">
+                                <input
+                                    type="text"
+                                    class="text_pole iig-additional-ref-group"
+                                    placeholder="${t`Group (e.g. characters, locations)`}"
+                                    value="${sanitizeForHtml(ref.group || '')}"
+                                >
+                                <input
+                                    type="text"
+                                    class="text_pole iig-additional-ref-secondary"
+                                    placeholder="${t`Secondary keys (AND, comma-separated)`}"
+                                    value="${sanitizeForHtml(ref.secondaryKeys || '')}"
+                                >
+                                <input
+                                    type="number"
+                                    class="text_pole iig-additional-ref-priority"
+                                    placeholder="${t`Priority`}"
+                                    step="1"
+                                    value="${Number.isFinite(ref.priority) ? ref.priority : 0}"
+                                    title="${t`Higher priority is matched first when provider limits references`}"
+                                >
+                            </div>
+                            <div class="iig-additional-ref-footer">
+                                <label class="checkbox_label">
+                                    <input type="checkbox" class="iig-additional-ref-always" ${isAlways ? 'checked' : ''}>
+                                    <span>${isAlways ? t`Always send` : t`Send on match`}</span>
+                                </label>
+                                <label class="checkbox_label" title="${t`Interpret trigger as JS regex. Secondary keys remain literal.`}">
+                                    <input type="checkbox" class="iig-additional-ref-regex" ${useRegex ? 'checked' : ''}>
+                                    <span>${t`Regex`}</span>
+                                </label>
+                                <div class="menu_button iig-additional-ref-vision ${previewSrc ? '' : 'iig-hidden'}" title="${t`Generate description via Vision AI`}">
+                                    <i class="fa-solid fa-robot"></i>
+                                </div>
+                                <div class="iig-additional-ref-move">
+                                    <div class="menu_button iig-additional-ref-move-up ${isFirst ? 'disabled' : ''}" title="${t`Move up`}" ${isFirst ? 'aria-disabled="true"' : ''}>
+                                        <i class="fa-solid fa-arrow-up"></i>
+                                    </div>
+                                    <div class="menu_button iig-additional-ref-move-down ${isLast ? 'disabled' : ''}" title="${t`Move down`}" ${isLast ? 'aria-disabled="true"' : ''}>
+                                        <i class="fa-solid fa-arrow-down"></i>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -624,7 +645,21 @@ export function renderAdditionalReferencesList(providerMaxRefs = 0) {
         return;
     }
 
+    const expandedIndices = new Set();
+    container.querySelectorAll('.iig-ref-expanded').forEach((row) => {
+        const idx = row.getAttribute('data-ref-index');
+        if (idx != null) expandedIndices.add(idx);
+    });
+
     container.innerHTML = buildAdditionalReferenceRowsHtml();
+
+    for (const idx of expandedIndices) {
+        const row = container.querySelector(`[data-ref-index="${idx}"]`);
+        if (row && !row.classList.contains('iig-ref-expanded')) {
+            row.classList.add('iig-ref-expanded');
+        }
+    }
+
     renderAdditionalReferencesStatus(providerMaxRefs);
 }
 

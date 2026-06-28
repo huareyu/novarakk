@@ -181,6 +181,8 @@ export function ensureAvatarItems(settings = getSettings()) {
     if (!Array.isArray(settings.avatarItems)) settings.avatarItems = [];
     for (const item of settings.avatarItems) {
         if (!Object.hasOwn(item, 'appearance')) item.appearance = '';
+        if (!Object.hasOwn(item, 'favorite')) item.favorite = false;
+        if (!Array.isArray(item.tags)) item.tags = [];
     }
     return settings.avatarItems;
 }
@@ -194,6 +196,8 @@ export function addAvatarItem(name, imageData, target = 'char') {
         imageData,
         target: target === 'user' ? 'user' : 'char',
         createdAt: Date.now(),
+        favorite: false,
+        tags: [],
     };
     items.push(item);
     saveSettings();
@@ -222,6 +226,15 @@ export function getActiveAvatarItem(target, settings = getSettings()) {
     return ensureAvatarItems(settings).find((a) => a.id === id) || null;
 }
 
+export function updateAvatarItemName(itemId, name) {
+    const settings = getSettings();
+    const item = ensureAvatarItems(settings).find((a) => a.id === itemId);
+    if (!item) return null;
+    item.name = String(name || '').trim() || 'Avatar';
+    saveSettings();
+    return item;
+}
+
 export function updateAvatarItemAppearance(itemId, appearance) {
     const settings = getSettings();
     const item = ensureAvatarItems(settings).find((a) => a.id === itemId);
@@ -230,6 +243,22 @@ export function updateAvatarItemAppearance(itemId, appearance) {
     saveSettings();
     updateAvatarAppearanceInjection();
     return item;
+}
+
+export function toggleAvatarFavorite(itemId) {
+    const settings = getSettings();
+    const item = ensureAvatarItems(settings).find((a) => a.id === itemId);
+    if (!item) return;
+    item.favorite = !item.favorite;
+    saveSettings();
+}
+
+export function updateAvatarItemTags(itemId, tags) {
+    const settings = getSettings();
+    const item = ensureAvatarItems(settings).find((a) => a.id === itemId);
+    if (!item) return;
+    item.tags = Array.isArray(tags) ? tags : [];
+    saveSettings();
 }
 
 /**

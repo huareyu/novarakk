@@ -63,6 +63,9 @@ import {
     updateNovelaiPreset,
     removeNovelaiPreset,
     toggleNovelaiPresetFavorite,
+    ensureAvatarTags,
+    addAvatarTag,
+    removeAvatarTag,
     MAX_CONTEXT_IMAGES,
     MAX_ADDITIONAL_REFERENCES,
     ensureConnectionProfiles,
@@ -114,8 +117,11 @@ import {
     removeAvatarItem,
     setActiveAvatar,
     getActiveAvatarItem,
+    updateAvatarItemName,
     updateAvatarItemAppearance,
     updateAvatarAppearanceInjection,
+    toggleAvatarFavorite,
+    updateAvatarItemTags,
     fileToResizedBase64,
 } from './extras.js';
 import {
@@ -503,6 +509,14 @@ function buildApiSettingsSectionHtml(settings = getSettings()) {
     `;
     return buildSettingsSectionHtml('iig_api_section', t`API settings`, bodyHtml, true);
 }
+
+// ----- Avatar library view state -----
+
+const AVATARS_PER_PAGE = 12;
+const avatarVS = {
+    char: { page: 0, sort: 'newest', filter: 'all', filterTag: '' },
+    user: { page: 0, sort: 'newest', filter: 'all', filterTag: '' },
+};
 
 // ----- Generic preset section factory (styles / prefixes / suffixes) -----
 
@@ -1220,35 +1234,37 @@ function buildLorebookBarHtml(settings = getSettings()) {
     ).join('');
     return `
         <div class="iig-lorebook-bar">
-            <div class="flex-row">
+            <div class="iig-lorebook-selector">
                 <label for="iig_lorebook_select">${t`Lorebook`}</label>
                 <select id="iig_lorebook_select" class="flex1">
                     ${optionsHtml}
                 </select>
-                <div class="iig-lorebook-buttons">
-                    <label class="checkbox_label" title="${t`Include this lorebook in matching`}">
-                        <input type="checkbox" id="iig_lorebook_enabled" ${active?.enabled !== false ? 'checked' : ''}>
-                        <span>${t`On`}</span>
-                    </label>
-                    <div id="iig_lorebook_add" class="menu_button" title="${t`Create new lorebook`}">
-                        <i class="fa-solid fa-plus"></i>
-                    </div>
-                    <div id="iig_lorebook_rename" class="menu_button" title="${t`Rename lorebook`}">
-                        <i class="fa-solid fa-pen"></i>
-                    </div>
-                    <div id="iig_lorebook_import_url" class="menu_button" title="${t`Import lorebook from URL`}">
-                        <i class="fa-solid fa-link"></i>
-                    </div>
-                    <label class="menu_button iig-lorebook-import-file" title="${t`Import lorebook from local file`}">
-                        <i class="fa-solid fa-file-arrow-down"></i>
-                        <input type="file" accept="application/json,.json" id="iig_lorebook_import_file_input" style="display:none">
-                    </label>
-                    <div id="iig_lorebook_export" class="menu_button" title="${t`Export current lorebook as JSON`}">
-                        <i class="fa-solid fa-file-arrow-up"></i>
-                    </div>
-                    <div id="iig_lorebook_remove" class="menu_button" title="${t`Delete lorebook`}">
-                        <i class="fa-solid fa-trash"></i>
-                    </div>
+                <label class="checkbox_label" title="${t`Include this lorebook in matching`}">
+                    <input type="checkbox" id="iig_lorebook_enabled" ${active?.enabled !== false ? 'checked' : ''}>
+                    <span>${t`On`}</span>
+                </label>
+            </div>
+            <div class="iig-lorebook-actions">
+                <div id="iig_lorebook_add" class="menu_button" title="${t`Create new lorebook`}">
+                    <i class="fa-solid fa-plus"></i>
+                </div>
+                <div id="iig_lorebook_rename" class="menu_button" title="${t`Rename lorebook`}">
+                    <i class="fa-solid fa-pen"></i>
+                </div>
+                <div class="iig-lorebook-actions-divider"></div>
+                <div id="iig_lorebook_import_url" class="menu_button" title="${t`Import lorebook from URL`}">
+                    <i class="fa-solid fa-link"></i>
+                </div>
+                <label class="menu_button iig-lorebook-import-file" title="${t`Import lorebook from local file`}">
+                    <i class="fa-solid fa-file-arrow-down"></i>
+                    <input type="file" accept="application/json,.json" id="iig_lorebook_import_file_input" style="display:none">
+                </label>
+                <div id="iig_lorebook_export" class="menu_button" title="${t`Export current lorebook as JSON`}">
+                    <i class="fa-solid fa-file-arrow-up"></i>
+                </div>
+                <div class="iig-lorebook-actions-divider"></div>
+                <div id="iig_lorebook_remove" class="menu_button" title="${t`Delete lorebook`}">
+                    <i class="fa-solid fa-trash"></i>
                 </div>
             </div>
         </div>
@@ -1352,7 +1368,7 @@ function buildReferencesSettingsSectionHtml(settings = getSettings()) {
             <div class="iig-extras-subhead">
                 <span>${t`Character avatars`}</span>
             </div>
-            <div id="iig_avatar_lib_char" class="iig-extras-grid"></div>
+            <div id="iig_avatar_lib_char"></div>
             <div id="iig_avatar_desc_char"></div>
             <div class="iig-extras-add-row">
                 <input type="text" id="iig_avatar_lib_char_name" class="text_pole flex1" placeholder="${t`Avatar name (optional)`}">
@@ -1365,7 +1381,7 @@ function buildReferencesSettingsSectionHtml(settings = getSettings()) {
             <div class="iig-extras-subhead">
                 <span>${t`User avatars`}</span>
             </div>
-            <div id="iig_avatar_lib_user" class="iig-extras-grid"></div>
+            <div id="iig_avatar_lib_user"></div>
             <div id="iig_avatar_desc_user"></div>
             <div class="iig-extras-add-row">
                 <input type="text" id="iig_avatar_lib_user_name" class="text_pole flex1" placeholder="${t`Avatar name (optional)`}">
@@ -1374,6 +1390,11 @@ function buildReferencesSettingsSectionHtml(settings = getSettings()) {
                     <i class="fa-solid fa-plus"></i> ${t`Add`}
                 </div>
             </div>
+
+            <div class="iig-avatar-tags-toolbar">
+                <div id="iig_avatar_tags_toggle" class="menu_button" title="${t`Manage avatar tags`}"><i class="fa-solid fa-tags"></i> ${t`Manage tags`}</div>
+            </div>
+            <div id="iig_avatar_tag_manager" class="iig-hidden"></div>
         </div>
 
         <div class="iig-settings-card-nested ${refsSectionVisible ? '' : 'iig-hidden'}" id="iig_image_context_section">
@@ -2529,7 +2550,14 @@ function bindAdditionalReferencesEvents(settings) {
             return;
         }
 
-        if (isNameField) refs[index].name = target.value;
+        if (isNameField) {
+            refs[index].name = target.value;
+            const sn = row?.querySelector('.iig-ref-summary-name');
+            if (sn) {
+                sn.textContent = target.value.trim() || t`Unnamed reference`;
+                sn.classList.toggle('iig-ref-summary-name-empty', !target.value.trim());
+            }
+        }
         if (isDescriptionField) refs[index].description = target.value;
         if (isGroupField) refs[index].group = target.value;
         if (isSecondaryField) refs[index].secondaryKeys = target.value;
@@ -2635,6 +2663,13 @@ function bindAdditionalReferencesEvents(settings) {
         const target = e.target instanceof Element ? e.target : null;
         if (!target) return;
 
+        const toggleSummary = target.closest('[data-ref-toggle]');
+        if (toggleSummary && !target.closest('.iig-ref-summary-enabled')) {
+            const row = toggleSummary.closest('.iig-additional-ref-row');
+            if (row) row.classList.toggle('iig-ref-expanded');
+            return;
+        }
+
         const urlBtn = target.closest('.iig-additional-ref-upload-url');
         const removeBtn = !urlBtn ? target.closest('.iig-additional-ref-remove') : null;
         const upBtn = !urlBtn && !removeBtn ? target.closest('.iig-additional-ref-move-up') : null;
@@ -2708,6 +2743,70 @@ function bindAdditionalReferencesEvents(settings) {
         }
         saveSettings();
         refreshAdditionalReferencesList();
+    });
+
+    // ---- Drag-and-drop reordering ----
+    const refListEl = document.getElementById('iig_additional_refs_list');
+    let dragFromIndex = -1;
+
+    refListEl?.addEventListener('dragstart', (e) => {
+        const handle = (e.target instanceof Element) ? e.target.closest('.iig-ref-drag-handle') : null;
+        if (!handle) return;
+        const row = handle.closest('.iig-additional-ref-row');
+        if (!row) return;
+        dragFromIndex = parseInt(row.getAttribute('data-ref-index') || '', 10);
+        e.dataTransfer.setData('text/plain', String(dragFromIndex));
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setDragImage(row, 20, 20);
+        setTimeout(() => row.classList.add('iig-ref-dragging'), 0);
+    });
+
+    refListEl?.addEventListener('dragover', (e) => {
+        if (dragFromIndex < 0) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const row = (e.target instanceof Element) ? e.target.closest('.iig-additional-ref-row') : null;
+        refListEl.querySelectorAll('.iig-ref-drop-above, .iig-ref-drop-below').forEach((el) => {
+            el.classList.remove('iig-ref-drop-above', 'iig-ref-drop-below');
+        });
+        if (!row || row.classList.contains('iig-ref-dragging')) return;
+        const rect = row.getBoundingClientRect();
+        if (e.clientY < rect.top + rect.height / 2) {
+            row.classList.add('iig-ref-drop-above');
+        } else {
+            row.classList.add('iig-ref-drop-below');
+        }
+    });
+
+    refListEl?.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const fromIndex = dragFromIndex;
+        dragFromIndex = -1;
+        refListEl.querySelectorAll('.iig-ref-drop-above, .iig-ref-drop-below, .iig-ref-dragging').forEach((el) => {
+            el.classList.remove('iig-ref-drop-above', 'iig-ref-drop-below', 'iig-ref-dragging');
+        });
+        const targetRow = (e.target instanceof Element) ? e.target.closest('.iig-additional-ref-row') : null;
+        if (!targetRow) return;
+        let toIndex = parseInt(targetRow.getAttribute('data-ref-index') || '', 10);
+        if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex) || fromIndex === toIndex) return;
+        const rect = targetRow.getBoundingClientRect();
+        const belowMid = e.clientY >= rect.top + rect.height / 2;
+        const refs = ensureAdditionalReferencesArray(settings);
+        const [moved] = refs.splice(fromIndex, 1);
+        let insertAt = toIndex;
+        if (fromIndex < toIndex) insertAt--;
+        if (belowMid) insertAt++;
+        insertAt = Math.max(0, Math.min(refs.length, insertAt));
+        refs.splice(insertAt, 0, moved);
+        saveSettings();
+        refreshAdditionalReferencesList();
+    });
+
+    refListEl?.addEventListener('dragend', () => {
+        dragFromIndex = -1;
+        refListEl.querySelectorAll('.iig-ref-drop-above, .iig-ref-drop-below, .iig-ref-dragging').forEach((el) => {
+            el.classList.remove('iig-ref-drop-above', 'iig-ref-drop-below', 'iig-ref-dragging');
+        });
     });
 }
 
@@ -2930,54 +3029,141 @@ function bindSettingsEvents() {
 
 // ----- Render: Avatar Library grids -----
 
+function getAvatarSortedFiltered(settings, target) {
+    const vs = avatarVS[target] || avatarVS.char;
+    let items = ensureAvatarItems(settings).filter((a) => a.target === target);
+    if (vs.filter === 'favorites') items = items.filter((a) => a.favorite);
+    if (vs.filterTag) items = items.filter((a) => (a.tags || []).includes(vs.filterTag));
+    switch (vs.sort) {
+        case 'oldest': items.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)); break;
+        case 'az': items.sort((a, b) => a.name.localeCompare(b.name)); break;
+        case 'za': items.sort((a, b) => b.name.localeCompare(a.name)); break;
+        case 'favorites': items.sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0) || (b.createdAt || 0) - (a.createdAt || 0)); break;
+        default: items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    }
+    return items;
+}
+
+function buildAvatarSortBarHtml(target, settings) {
+    const vs = avatarVS[target] || avatarVS.char;
+    const totalCount = ensureAvatarItems(settings).filter((a) => a.target === target).length;
+    const tags = ensureAvatarTags(settings);
+    const tagChips = tags.map((tag) =>
+        `<div class="iig-styles-filter-chip ${vs.filterTag === tag ? 'active' : ''}" data-ava-filter-tag="${sanitizeForHtml(tag)}">${sanitizeForHtml(tag)}</div>`).join('');
+    return `
+        <div class="iig-ava-sort-bar">
+            <select class="text_pole" data-ava-sort="${target}">
+                <option value="newest" ${vs.sort === 'newest' ? 'selected' : ''}>${t`Newest`}</option>
+                <option value="oldest" ${vs.sort === 'oldest' ? 'selected' : ''}>${t`Oldest`}</option>
+                <option value="az" ${vs.sort === 'az' ? 'selected' : ''}>A → Z</option>
+                <option value="za" ${vs.sort === 'za' ? 'selected' : ''}>Z → A</option>
+                <option value="favorites" ${vs.sort === 'favorites' ? 'selected' : ''}>★ ${t`first`}</option>
+            </select>
+            <div class="iig-styles-filter-chip ${vs.filter === 'all' ? 'active' : ''}" data-ava-filter-all>${t`All`} (${totalCount})</div>
+            <div class="iig-styles-filter-chip ${vs.filter === 'favorites' ? 'active' : ''}" data-ava-filter-fav>★</div>
+            ${tagChips}
+        </div>`;
+}
+
+function buildAvatarPaginationHtml(target, totalPages) {
+    const vs = avatarVS[target] || avatarVS.char;
+    if (totalPages <= 1) return '';
+    let html = '<div class="iig-styles-pagination">';
+    html += `<div class="iig-styles-page-btn ${vs.page <= 0 ? 'disabled' : ''}" data-ava-page-prev><i class="fa-solid fa-chevron-left"></i></div>`;
+    for (let i = 0; i < totalPages; i++) {
+        html += `<div class="iig-styles-page-btn ${i === vs.page ? 'active' : ''}" data-ava-page="${i}">${i + 1}</div>`;
+    }
+    html += `<div class="iig-styles-page-btn ${vs.page >= totalPages - 1 ? 'disabled' : ''}" data-ava-page-next><i class="fa-solid fa-chevron-right"></i></div>`;
+    html += '</div>';
+    return html;
+}
+
 function renderAvatarGrid(target) {
     const settings = getSettings();
     const containerId = target === 'user' ? 'iig_avatar_lib_user' : 'iig_avatar_lib_char';
     const container = document.getElementById(containerId);
     if (!container) return;
 
-    const items = ensureAvatarItems(settings).filter((a) => a.target === target);
+    const vs = avatarVS[target] || avatarVS.char;
+    const allSorted = getAvatarSortedFiltered(settings, target);
+    const totalPages = Math.max(1, Math.ceil(allSorted.length / AVATARS_PER_PAGE));
+    if (vs.page >= totalPages) vs.page = Math.max(0, totalPages - 1);
+    const pageItems = allSorted.slice(vs.page * AVATARS_PER_PAGE, (vs.page + 1) * AVATARS_PER_PAGE);
     const activeId = target === 'user' ? settings.activeAvatarUser : settings.activeAvatarChar;
 
-    if (items.length === 0) {
-        container.innerHTML = `<div class="iig-extras-empty">${t`No avatars yet. Add one to override the default.`}</div>`;
-        return;
+    const sortBar = buildAvatarSortBarHtml(target, settings);
+
+    let gridHtml;
+    if (allSorted.length === 0) {
+        const totalItems = ensureAvatarItems(settings).filter((a) => a.target === target).length;
+        let emptyMsg;
+        if (totalItems === 0) emptyMsg = t`No avatars yet. Add one below.`;
+        else if (vs.filter === 'favorites' && vs.filterTag) emptyMsg = t`No favorites with this tag.`;
+        else if (vs.filter === 'favorites') emptyMsg = t`No favorites yet.`;
+        else if (vs.filterTag) emptyMsg = t`No items with this tag.`;
+        else emptyMsg = t`No results.`;
+        gridHtml = `<div class="iig-extras-empty">${emptyMsg}</div>`;
+    } else {
+        gridHtml = `<div class="iig-extras-grid">${pageItems.map((item) => {
+            const isActive = item.id === activeId;
+            return `
+            <div class="iig-extras-card ${isActive ? 'iig-extras-active' : ''}" data-ava-id="${sanitizeForHtml(item.id)}" data-ava-target="${target}">
+                <img src="data:image/png;base64,${item.imageData}" class="iig-extras-img" alt="${sanitizeForHtml(item.name)}">
+                <div class="iig-extras-fav" data-ava-fav="${sanitizeForHtml(item.id)}" title="${item.favorite ? t`Remove from favorites` : t`Add to favorites`}"><i class="fa-${item.favorite ? 'solid' : 'regular'} fa-star"></i></div>
+                ${isActive ? '<div class="iig-extras-check"><i class="fa-solid fa-check"></i></div>' : ''}
+                <div class="iig-extras-overlay">
+                    <span class="iig-extras-name" title="${sanitizeForHtml(item.name)}">${sanitizeForHtml(item.name)}</span>
+                    <i class="fa-solid fa-trash iig-extras-delete" data-ava-del="${sanitizeForHtml(item.id)}" title="${t`Delete`}"></i>
+                </div>
+            </div>`;
+        }).join('')}</div>`;
     }
 
-    container.innerHTML = items.map((item) => `
-        <div class="iig-extras-card ${item.id === activeId ? 'iig-extras-active' : ''}" data-ava-id="${sanitizeForHtml(item.id)}" data-ava-target="${target}">
-            <img src="data:image/png;base64,${item.imageData}" class="iig-extras-img" alt="${sanitizeForHtml(item.name)}">
-            <div class="iig-extras-overlay">
-                <span class="iig-extras-name" title="${sanitizeForHtml(item.name)}">${sanitizeForHtml(item.name)}</span>
-                <i class="fa-solid fa-trash iig-extras-delete" data-ava-del="${sanitizeForHtml(item.id)}" title="${t`Delete`}"></i>
-            </div>
-            ${item.id === activeId ? '<div class="iig-extras-check"><i class="fa-solid fa-check"></i></div>' : ''}
-        </div>
-    `).join('');
-
-    container.querySelectorAll('.iig-extras-card').forEach((card) => {
-        card.addEventListener('click', (e) => {
-            if (e.target instanceof Element && e.target.closest('.iig-extras-delete')) return;
-            const avaId = card.getAttribute('data-ava-id');
-            const avaTarget = card.getAttribute('data-ava-target') || target;
-            if (!avaId) return;
-            setActiveAvatar(avaId, avaTarget);
-            renderAvatarGrid(avaTarget);
-        });
-    });
-
-    container.querySelectorAll('.iig-extras-delete').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const avaId = btn.getAttribute('data-ava-del');
-            if (!avaId) return;
-            removeAvatarItem(avaId);
-            renderAvatarGrid(target);
-            toastr.info(t`Avatar deleted`, t`Image Generation`);
-        });
-    });
+    const pagination = buildAvatarPaginationHtml(target, totalPages);
+    container.innerHTML = sortBar + gridHtml + pagination;
 
     renderAvatarAppearancePanel(target);
+}
+
+function bindAvatarGridEvents(target) {
+    const containerId = target === 'user' ? 'iig_avatar_lib_user' : 'iig_avatar_lib_char';
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    container.addEventListener('click', (e) => {
+        const tgt = e.target instanceof Element ? e.target : null;
+        if (!tgt) return;
+        const vs = avatarVS[target] || avatarVS.char;
+
+        if (tgt.closest('[data-ava-filter-all]')) { vs.filter = 'all'; vs.filterTag = ''; vs.page = 0; renderAvatarGrid(target); return; }
+        if (tgt.closest('[data-ava-filter-fav]')) { vs.filter = vs.filter === 'favorites' ? 'all' : 'favorites'; vs.page = 0; renderAvatarGrid(target); return; }
+        const tagC = tgt.closest('[data-ava-filter-tag]');
+        if (tagC) { const tn = tagC.getAttribute('data-ava-filter-tag') || ''; vs.filterTag = vs.filterTag === tn ? '' : tn; vs.page = 0; renderAvatarGrid(target); return; }
+        const pg = tgt.closest('[data-ava-page]');
+        if (pg) { vs.page = parseInt(pg.getAttribute('data-ava-page'), 10) || 0; renderAvatarGrid(target); return; }
+        if (tgt.closest('[data-ava-page-prev]')) { if (vs.page > 0) { vs.page--; renderAvatarGrid(target); } return; }
+        if (tgt.closest('[data-ava-page-next]')) {
+            const sorted = getAvatarSortedFiltered(getSettings(), target);
+            const tp = Math.max(1, Math.ceil(sorted.length / AVATARS_PER_PAGE));
+            if (vs.page < tp - 1) { vs.page++; renderAvatarGrid(target); } return;
+        }
+
+        const fav = tgt.closest('[data-ava-fav]');
+        if (fav) { e.stopPropagation(); toggleAvatarFavorite(fav.getAttribute('data-ava-fav')); renderAvatarGrid(target); return; }
+
+        const del = tgt.closest('[data-ava-del]');
+        if (del) { e.stopPropagation(); removeAvatarItem(del.getAttribute('data-ava-del')); renderAvatarGrid(target); toastr.info(t`Avatar deleted`, t`Image Generation`); return; }
+
+        const card = tgt.closest('[data-ava-id]');
+        if (card) { setActiveAvatar(card.getAttribute('data-ava-id'), target); renderAvatarGrid(target); return; }
+    });
+
+    container.addEventListener('change', (e) => {
+        if (e.target instanceof HTMLSelectElement && e.target.hasAttribute('data-ava-sort')) {
+            const vs = avatarVS[target] || avatarVS.char;
+            vs.sort = e.target.value; vs.page = 0; renderAvatarGrid(target);
+        }
+    });
 }
 
 // ----- Render: Avatar appearance panels -----
@@ -2987,18 +3173,32 @@ function renderAvatarAppearancePanel(target) {
     const panel = document.getElementById(panelId);
     if (!panel) return;
 
+    const settings = getSettings();
     const activeItem = getActiveAvatarItem(target);
     if (!activeItem) {
         panel.innerHTML = '';
         return;
     }
 
+    const allTags = ensureAvatarTags(settings);
+    const itemTags = activeItem.tags || [];
+    const editorTagsHtml = allTags.length > 0
+        ? `<div class="iig-style-editor-tags">${allTags.map((tag) => {
+            const on = itemTags.includes(tag);
+            return `<div class="iig-style-editor-tag ${on ? 'active' : ''}" data-ava-editor-tag="${sanitizeForHtml(tag)}">${sanitizeForHtml(tag)}</div>`;
+        }).join('')}</div>`
+        : '';
+
     panel.innerHTML = `
         <div class="iig-wardrobe-desc-panel">
             <div class="iig-wardrobe-desc-header">
-                <i class="fa-solid fa-user"></i>
-                <span>${t`Appearance`}: <b>${sanitizeForHtml(activeItem.name)}</b></span>
+                <i class="fa-solid fa-pen"></i>
+                <input type="text" class="text_pole iig-avatar-name-input" value="${sanitizeForHtml(activeItem.name)}"
+                    data-ava-id="${sanitizeForHtml(activeItem.id)}" placeholder="${t`Avatar name`}">
             </div>
+            ${editorTagsHtml
+                ? `<div class="iig-avatar-tags-section"><span class="iig-avatar-tags-label"><i class="fa-solid fa-tags"></i> ${t`Tags`}</span>${editorTagsHtml}</div>`
+                : `<div class="iig-avatar-tags-section"><span class="iig-avatar-tags-hint">${t`Use "Manage tags" below to create tags`}</span></div>`}
             <textarea class="text_pole iig-avatar-desc-textarea" rows="3"
                 placeholder="${t`Enter appearance description manually or generate via Vision AI...`}"
                 data-ava-id="${sanitizeForHtml(activeItem.id)}">${sanitizeForHtml(activeItem.appearance || '')}</textarea>
@@ -3016,6 +3216,16 @@ function renderAvatarAppearancePanel(target) {
             <div class="iig-wardrobe-desc-status" style="display:none;"></div>
         </div>
     `;
+
+    const nameInput = panel.querySelector('.iig-avatar-name-input');
+    nameInput?.addEventListener('blur', () => {
+        const avaId = nameInput.getAttribute('data-ava-id');
+        if (avaId) {
+            updateAvatarItemName(avaId, nameInput.value);
+            renderAvatarGrid(target);
+        }
+    });
+    nameInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') nameInput.blur(); });
 
     const textarea = panel.querySelector('.iig-avatar-desc-textarea');
 
@@ -3076,6 +3286,16 @@ function renderAvatarAppearancePanel(target) {
             btn.innerHTML = originalHtml;
             setTimeout(() => { if (statusEl) statusEl.style.display = 'none'; }, 5000);
         }
+    });
+
+    panel.querySelectorAll('[data-ava-editor-tag]').forEach((chip) => {
+        chip.addEventListener('click', () => {
+            const tagName = chip.getAttribute('data-ava-editor-tag') || '';
+            const current = activeItem.tags || [];
+            const newTags = current.includes(tagName) ? current.filter((t2) => t2 !== tagName) : [...current, tagName];
+            updateAvatarItemTags(activeItem.id, newTags);
+            chip.classList.toggle('active');
+        });
     });
 }
 
@@ -3230,6 +3450,8 @@ function bindExtrasEvents(settings) {
                 addAvatarItem(name, resized, target);
                 if (nameInput instanceof HTMLInputElement) nameInput.value = '';
                 if (fileInput instanceof HTMLInputElement) fileInput.value = '';
+                const vs = avatarVS[target] || avatarVS.char;
+                vs.page = 0; vs.sort = 'newest'; vs.filter = 'all'; vs.filterTag = '';
                 renderAvatarGrid(target);
                 toastr.success(t`Avatar "${name}" added`, t`Image Generation`);
             } catch (error) {
@@ -3239,6 +3461,63 @@ function bindExtrasEvents(settings) {
     };
     bindAvatarLibAdd('char');
     bindAvatarLibAdd('user');
+    bindAvatarGridEvents('char');
+    bindAvatarGridEvents('user');
+
+    // ---- Avatar tag manager ----
+    function buildAvatarTagManagerHtml() {
+        const tags = ensureAvatarTags(settings);
+        const tagsHtml = tags.map((tag) =>
+            `<div class="iig-styles-tag-manage-item"><span>${sanitizeForHtml(tag)}</span><div class="iig-styles-tag-manage-remove" data-ava-rm-tag="${sanitizeForHtml(tag)}"><i class="fa-solid fa-xmark"></i></div></div>`).join('');
+        return `<div class="iig-styles-tag-manager">
+            <div class="iig-styles-tag-manager-list">${tagsHtml}</div>
+            <div class="iig-styles-tag-manager-add">
+                <input type="text" class="text_pole flex1" id="iig_avatar_new_tag" placeholder="${t`New tag…`}">
+                <div class="menu_button" id="iig_avatar_add_tag"><i class="fa-solid fa-plus"></i></div>
+            </div>
+        </div>`;
+    }
+
+    function refreshAvatarTagManager() {
+        const mgr = document.getElementById('iig_avatar_tag_manager');
+        if (mgr && !mgr.classList.contains('iig-hidden')) mgr.innerHTML = buildAvatarTagManagerHtml();
+    }
+
+    document.getElementById('iig_avatar_tags_toggle')?.addEventListener('click', () => {
+        const mgr = document.getElementById('iig_avatar_tag_manager');
+        if (!mgr) return;
+        const wasHidden = mgr.classList.contains('iig-hidden');
+        mgr.classList.toggle('iig-hidden', !wasHidden);
+        if (wasHidden) mgr.innerHTML = buildAvatarTagManagerHtml();
+    });
+
+    document.getElementById('iig_avatar_tag_manager')?.addEventListener('click', (e) => {
+        const tgt = e.target instanceof Element ? e.target : null;
+        if (!tgt) return;
+        const rmBtn = tgt.closest('[data-ava-rm-tag]');
+        if (rmBtn) {
+            const tagName = rmBtn.getAttribute('data-ava-rm-tag') || '';
+            removeAvatarTag(tagName, settings);
+            for (const t2 of ['char', 'user']) { if (avatarVS[t2].filterTag === tagName) avatarVS[t2].filterTag = ''; }
+            saveSettings(); renderAvatarGrid('char'); renderAvatarGrid('user'); refreshAvatarTagManager();
+            return;
+        }
+        if (tgt.closest('#iig_avatar_add_tag')) {
+            const input = document.getElementById('iig_avatar_new_tag');
+            if (input instanceof HTMLInputElement && input.value.trim()) {
+                addAvatarTag(input.value.trim(), settings);
+                input.value = '';
+                saveSettings(); renderAvatarGrid('char'); renderAvatarGrid('user'); refreshAvatarTagManager();
+            }
+        }
+    });
+
+    document.getElementById('iig_avatar_tag_manager')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.id === 'iig_avatar_new_tag') {
+            e.preventDefault();
+            document.getElementById('iig_avatar_add_tag')?.click();
+        }
+    });
 
     // ---- Wardrobe ----
     document.getElementById('iig_inject_avatar_appearance_gen')?.addEventListener('change', (e) => {

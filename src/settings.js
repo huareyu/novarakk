@@ -167,6 +167,7 @@ export const defaultSettings = Object.freeze({
     swSendOutfitImageUser: true,
     // Custom avatars (avatar library) — заменяет дефолт из карточки/persona.
     avatarItems: [],
+    avatarTags: [],
     activeAvatarChar: null,
     activeAvatarUser: null,
     // Wardrobe injection в LLM-промпт через setExtensionPrompt.
@@ -646,6 +647,36 @@ export function removeStyleTag(tagName, settings = getSettings()) {
     for (const style of ensureStyles(settings)) {
         const si = style.tags.indexOf(tagName);
         if (si !== -1) style.tags.splice(si, 1);
+    }
+    return true;
+}
+
+// ---- Avatar tags ----
+
+export function ensureAvatarTags(settings = getSettings()) {
+    if (!Array.isArray(settings.avatarTags)) settings.avatarTags = [];
+    settings.avatarTags = settings.avatarTags.map((t) => String(t || '').trim()).filter(Boolean);
+    return settings.avatarTags;
+}
+
+export function addAvatarTag(tagName, settings = getSettings()) {
+    const tags = ensureAvatarTags(settings);
+    const name = String(tagName || '').trim();
+    if (!name || tags.some((t) => t.toLowerCase() === name.toLowerCase())) return false;
+    tags.push(name);
+    return true;
+}
+
+export function removeAvatarTag(tagName, settings = getSettings()) {
+    const tags = ensureAvatarTags(settings);
+    const idx = tags.findIndex((t) => t === tagName);
+    if (idx === -1) return false;
+    tags.splice(idx, 1);
+    const items = Array.isArray(settings.avatarItems) ? settings.avatarItems : [];
+    for (const item of items) {
+        if (!Array.isArray(item.tags)) continue;
+        const si = item.tags.indexOf(tagName);
+        if (si !== -1) item.tags.splice(si, 1);
     }
     return true;
 }

@@ -259,5 +259,20 @@
     "Prompt": "Промпт",
     "Copy": "Копіювати",
     "Copied to clipboard": "Скопійовано",
-    "No prompt available": "Промпт недоступний"
+    "No prompt available": "Промпт недоступний",
+    "Chat Gallery": "Галерея чату",
+    "Selection mode": "Режим вибору",
+    "Select all": "Вибрати все",
+    "Delete selected": "Видалити вибрані",
+    "Download selected": "Завантажити вибрані",
+    "No generated images in this chat": "У цьому чаті немає згенерованих зображень",
+    "Message": "Повідомлення",
+    "Delete this image from chat?": "Видалити це зображення з чату?",
+    "Image deleted": "Зображення видалено",
+    "Gallery": "Галерея",
+    "This cannot be undone.": "Цю дію не можна скасувати.",
+    "Sort": "Сортування",
+    "Newest": "Нові",
+    "Oldest": "Старі",
+    "Per page": "На сторінці"
 }

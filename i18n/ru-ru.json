@@ -346,5 +346,20 @@
     "Prompt": "Промпт",
     "Copy": "Копировать",
     "Copied to clipboard": "Скопировано",
-    "No prompt available": "Промпт недоступен"
+    "No prompt available": "Промпт недоступен",
+    "Chat Gallery": "Галерея чата",
+    "Selection mode": "Режим выбора",
+    "Select all": "Выбрать все",
+    "Delete selected": "Удалить выбранные",
+    "Download selected": "Скачать выбранные",
+    "No generated images in this chat": "В этом чате нет сгенерированных картинок",
+    "Message": "Сообщение",
+    "Delete this image from chat?": "Удалить эту картинку из чата?",
+    "Image deleted": "Картинка удалена",
+    "Gallery": "Галерея",
+    "This cannot be undone.": "Это действие нельзя отменить.",
+    "Sort": "Сортировка",
+    "Newest": "Новые",
+    "Oldest": "Старые",
+    "Per page": "На странице"
 }

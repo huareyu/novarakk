@@ -20,6 +20,7 @@ import { initLightbox } from './src/lightbox.js';
 import { updateAvatarAppearanceInjection } from './src/extras.js';
 import { initWardrobe } from './src/wardrobe.js';
 import { initImageActions } from './src/imageActions.js';
+import { initGallery } from './src/gallery.js';
 
 (function init() {
     const context = SillyTavern.getContext();
@@ -39,6 +40,9 @@ import { initImageActions } from './src/imageActions.js';
 
     // Wardrobe v4 — init early so settings are seeded and event hooks registered.
     initWardrobe();
+
+    // Gallery — wand menu button.
+    initGallery();
 
     // Create settings UI when app is ready.
     context.eventSource.on(context.event_types.APP_READY, () => {

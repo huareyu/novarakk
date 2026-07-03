@@ -13,6 +13,8 @@ import { rerenderMessageHtml } from './parser.js';
 const GALLERY_OVERLAY_ID = 'iig_gallery_overlay';
 const PAGE_SIZE_OPTIONS = [6, 12, 24, 48];
 const DEFAULT_PER_PAGE = 12;
+const THUMB_SIZE_OPTIONS = [100, 130, 160, 200];
+const DEFAULT_THUMB_SIZE = 130;
 
 // ── Collect images from current chat ──
 
@@ -79,11 +81,14 @@ let gs = {
     page: 0,
     sort: 'newest',
     perPage: DEFAULT_PER_PAGE,
+    thumbSize: DEFAULT_THUMB_SIZE,
+    showThumbSlider: false,
 };
 
 function resetState() {
     const perPage = gs.perPage || DEFAULT_PER_PAGE;
-    gs = { images: [], selected: new Set(), selectMode: false, page: 0, sort: 'newest', perPage };
+    const thumbSize = gs.thumbSize || DEFAULT_THUMB_SIZE;
+    gs = { images: [], selected: new Set(), selectMode: false, page: 0, sort: 'newest', perPage, thumbSize, showThumbSlider: false };
 }
 
 function getSorted() {
@@ -151,6 +156,9 @@ export function openGallery() {
             <div class="iig-gallery-header">
                 <span class="iig-gallery-title"><i class="fa-solid fa-images"></i> ${t`Chat Gallery`}</span>
                 <span class="iig-gallery-count" id="iig_gallery_count"></span>
+                <button class="iig-gallery-btn iig-gallery-close iig-gallery-close-mobile" id="iig_gallery_close_mobile" type="button" title="${t`Close`}">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
                 <div class="iig-gallery-header-actions">
                     <select class="iig-gallery-sort" id="iig_gallery_sort" title="${t`Sort`}">
                         <option value="newest" selected>${t`Newest`}</option>
@@ -173,12 +181,16 @@ export function openGallery() {
                     <button class="iig-gallery-btn" id="iig_gallery_download_selected" type="button" title="${t`Download selected`}" style="display:none">
                         <i class="fa-solid fa-download"></i>
                     </button>
+                    <button class="iig-gallery-btn" id="iig_gallery_thumbsize_toggle" type="button" title="${t`Thumb size`}">
+                        <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
+                    </button>
                     <button class="iig-gallery-btn iig-gallery-close" id="iig_gallery_close" type="button" title="${t`Close`}">
                         <i class="fa-solid fa-xmark"></i>
                     </button>
                 </div>
             </div>
             <div class="iig-gallery-body" id="iig_gallery_body"></div>
+            <div class="iig-gallery-footer" id="iig_gallery_footer"></div>
         </div>
     `;
 
@@ -190,6 +202,7 @@ export function openGallery() {
     // Close
     const close = () => { resetState(); overlay.remove(); };
     overlay.querySelector('#iig_gallery_close').addEventListener('click', close);
+    overlay.querySelector('#iig_gallery_close_mobile').addEventListener('click', close);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
     document.addEventListener('keydown', function escHandler(e) {
         if (e.key === 'Escape' && document.getElementById(GALLERY_OVERLAY_ID)) {
@@ -220,6 +233,16 @@ export function openGallery() {
         gs.selected.clear();
         updateSelectionUI(overlay);
         renderContent(bodyEl);
+    });
+
+    applyThumbSize(overlay);
+
+    // Thumb size toggle
+    overlay.querySelector('#iig_gallery_thumbsize_toggle').addEventListener('click', () => {
+        gs.showThumbSlider = !gs.showThumbSlider;
+        overlay.querySelector('#iig_gallery_thumbsize_toggle').classList.toggle('iig-gallery-btn-active', gs.showThumbSlider);
+        const footerEl = overlay.querySelector('#iig_gallery_footer');
+        if (footerEl) renderFooter(footerEl);
     });
 
     // Selection mode toggle
@@ -310,12 +333,18 @@ function updateCount(overlay) {
 
 // ── Render grid + pagination ──
 
+function applyThumbSize(overlay) {
+    overlay.style.setProperty('--iig-gallery-thumb-min', gs.thumbSize + 'px');
+}
+
 function renderContent(bodyEl) {
     clampPage();
     const sorted = getSorted();
+    const overlay = document.getElementById(GALLERY_OVERLAY_ID);
 
     if (sorted.length === 0) {
         bodyEl.innerHTML = `<div class="iig-gallery-empty"><i class="fa-regular fa-image"></i><p>${t`No generated images in this chat`}</p></div>`;
+        if (overlay) renderFooter(overlay.querySelector('#iig_gallery_footer'));
         return;
     }
 
@@ -346,15 +375,42 @@ function renderContent(bodyEl) {
         `;
     }).join('');
 
-    const paginationHtml = buildPaginationHtml();
+    bodyEl.innerHTML = `<div class="iig-gallery-grid">${cardsHtml}</div>`;
 
-    bodyEl.innerHTML = `
-        <div class="iig-gallery-grid">${cardsHtml}</div>
-        ${paginationHtml}
-    `;
+    if (overlay) {
+        applyThumbSize(overlay);
+        renderFooter(overlay.querySelector('#iig_gallery_footer'));
+    }
 
     bodyEl.removeEventListener('click', handleBodyClick);
     bodyEl.addEventListener('click', handleBodyClick);
+}
+
+function renderFooter(footerEl) {
+    if (!footerEl) return;
+    const paginationHtml = buildPaginationHtml();
+    const thumbSliderHtml = gs.showThumbSlider ? `
+        <div class="iig-gallery-thumb-size-wrap">
+            <i class="fa-solid fa-image" style="font-size:10px;opacity:0.5"></i>
+            <input type="range" class="iig-gallery-thumb-slider" id="iig_gallery_thumb_size"
+                min="${THUMB_SIZE_OPTIONS[0]}" max="${THUMB_SIZE_OPTIONS[THUMB_SIZE_OPTIONS.length - 1]}"
+                step="10" value="${gs.thumbSize}">
+            <i class="fa-solid fa-image" style="font-size:16px;opacity:0.5"></i>
+        </div>
+    ` : '';
+    const hasContent = paginationHtml || thumbSliderHtml;
+    footerEl.innerHTML = hasContent ? `<div class="iig-gallery-footer-row">${paginationHtml}${thumbSliderHtml}</div>` : '';
+    footerEl.style.display = hasContent ? '' : 'none';
+    const slider = footerEl.querySelector('#iig_gallery_thumb_size');
+    if (slider) {
+        slider.addEventListener('input', (e) => {
+            gs.thumbSize = parseInt(e.target.value, 10) || DEFAULT_THUMB_SIZE;
+            const overlay = document.getElementById(GALLERY_OVERLAY_ID);
+            if (overlay) applyThumbSize(overlay);
+        });
+    }
+    footerEl.removeEventListener('click', handleBodyClick);
+    footerEl.addEventListener('click', handleBodyClick);
 }
 
 function buildPaginationHtml() {

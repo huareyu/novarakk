@@ -9,7 +9,7 @@
  */
 
 import { t } from './i18n.js';
-import { iigLog } from './settings.js';
+import { downloadImageSrc } from './utils.js';
 import { regenerateSingleTag } from './pipeline.js';
 
 const IMG_SELECTOR = 'img[data-iig-instruction]';
@@ -103,39 +103,10 @@ function buildActions(img, isError) {
 }
 
 async function downloadImage(img) {
-    const src = img.src;
-    let url = src;
-    let cleanup = null;
-    if (!src.startsWith('data:')) {
-        try {
-            const resp = await fetch(src);
-            const blob = await resp.blob();
-            url = URL.createObjectURL(blob);
-            cleanup = () => URL.revokeObjectURL(url);
-        } catch (err) {
-            iigLog('ERROR', 'Image download failed:', err);
-            toastr.error(t`Failed to download image`, t`Image Generation`);
-            return;
-        }
+    const ok = await downloadImageSrc(img.src);
+    if (!ok) {
+        toastr.error(t`Failed to download image`, t`Image Generation`);
     }
-    const ext = guessExtension(src);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `iig_${Date.now()}.${ext}`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    if (cleanup) setTimeout(cleanup, 100);
-}
-
-function guessExtension(src) {
-    if (src.startsWith('data:')) {
-        const m = src.match(/^data:image\/([a-z0-9+]+)/i);
-        if (m) return m[1].replace('jpeg', 'jpg');
-    }
-    const m = src.match(/\.([a-z0-9]+)(?:\?|#|$)/i);
-    if (m) return m[1].toLowerCase();
-    return 'png';
 }
 
 async function regenerateOne(img) {

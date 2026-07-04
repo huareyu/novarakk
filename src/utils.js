@@ -324,6 +324,73 @@ export function sanitizeForSingleQuotedAttribute(text) {
         .replace(/>/g, '&gt;');
 }
 
+// ----- Generated image helpers (shared by lightbox / gallery / imageActions / pipeline) -----
+
+/** Декодирует HTML-сущности, которыми экранирован атрибут data-iig-instruction. */
+export function decodeHtmlEntities(text) {
+    return String(text || '')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&#39;/g, "'")
+        .replace(/&#34;/g, '"')
+        .replace(/&amp;/g, '&');
+}
+
+/**
+ * Парсит JSON из атрибута data-iig-instruction.
+ * @param {string|null} instruction — сырое значение атрибута.
+ * @returns {object|null} объект инструкции или null (пустой/битый атрибут).
+ */
+export function parseInstructionAttr(instruction) {
+    if (!instruction) return null;
+    try {
+        const parsed = JSON.parse(decodeHtmlEntities(instruction));
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+/** Определяет расширение файла картинки по src (data URL или обычный путь). */
+export function guessImageExtension(src) {
+    if (src.startsWith('data:')) {
+        const m = src.match(/^data:image\/([a-z0-9+]+)/i);
+        if (m) return m[1].replace('jpeg', 'jpg');
+    }
+    const m = src.match(/\.([a-z0-9]+)(?:\?|#|$)/i);
+    if (m) return m[1].toLowerCase();
+    return 'png';
+}
+
+/**
+ * Скачивает картинку по src через временный <a download>;
+ * не-data URL предварительно тянется в Blob (иначе браузер откроет вкладку).
+ * @returns {Promise<boolean>} false, если скачивание не удалось.
+ */
+export async function downloadImageSrc(src, filename = null) {
+    let url = src;
+    let cleanup = null;
+    if (!src.startsWith('data:')) {
+        try {
+            const resp = await fetch(src);
+            const blob = await resp.blob();
+            url = URL.createObjectURL(blob);
+            cleanup = () => URL.revokeObjectURL(url);
+        } catch (err) {
+            iigLog('ERROR', 'Image download failed:', err);
+            return false;
+        }
+    }
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || `iig_${Date.now()}.${guessImageExtension(src)}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    if (cleanup) setTimeout(cleanup, 100);
+    return true;
+}
+
 // ----- Binary helpers -----
 
 /**

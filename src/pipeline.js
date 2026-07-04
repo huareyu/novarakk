@@ -20,6 +20,7 @@ import {
     saveImageToFile,
     saveNaisteraMediaToFile,
     ERROR_IMAGE_PATH,
+    decodeHtmlEntities,
     parseImageDataUrl,
     ProviderError,
 } from './utils.js';
@@ -549,19 +550,8 @@ export async function processMessageTags(messageId) {
 
             if (instruction) {
                 // Strategy 1: Decode HTML entities and normalize quotes, then match
-                const decodedInstruction = instruction
-                    .replace(/&quot;/g, '"')
-                    .replace(/&apos;/g, "'")
-                    .replace(/&#39;/g, "'")
-                    .replace(/&#34;/g, '"')
-                    .replace(/&amp;/g, '&');
-
-                const normalizedSearchPrompt = searchPrompt
-                    .replace(/&quot;/g, '"')
-                    .replace(/&apos;/g, "'")
-                    .replace(/&#39;/g, "'")
-                    .replace(/&#34;/g, '"')
-                    .replace(/&amp;/g, '&');
+                const decodedInstruction = decodeHtmlEntities(instruction);
+                const normalizedSearchPrompt = decodeHtmlEntities(searchPrompt);
 
                 if (decodedInstruction.includes(normalizedSearchPrompt)) {
                     iigLog('INFO', `Found img element via decoded instruction match`);

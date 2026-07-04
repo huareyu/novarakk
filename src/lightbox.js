@@ -11,6 +11,7 @@
  */
 
 import { t } from './i18n.js';
+import { parseInstructionAttr, downloadImageSrc } from './utils.js';
 
 const OVERLAY_ID = 'iig_lightbox';
 const MIN_SCALE = 1;
@@ -177,28 +178,8 @@ export function initLightbox() {
     overlay.querySelector('.iig-lightbox-download')?.addEventListener('click', async (e) => {
         e.stopPropagation();
         e.preventDefault();
-        const src = state.imgSrc;
-        if (!src) return;
-        let url = src;
-        let cleanup = null;
-        if (!src.startsWith('data:')) {
-            try {
-                const resp = await fetch(src);
-                const blob = await resp.blob();
-                url = URL.createObjectURL(blob);
-                cleanup = () => URL.revokeObjectURL(url);
-            } catch {
-                return;
-            }
-        }
-        const ext = guessExtension(src);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `iig_${Date.now()}.${ext}`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        if (cleanup) setTimeout(cleanup, 100);
+        if (!state.imgSrc) return;
+        await downloadImageSrc(state.imgSrc);
     });
 
     // --- Prompt toggle ---
@@ -389,23 +370,10 @@ export function initLightbox() {
         e.preventDefault();
         e.stopPropagation();
 
-        // Extract prompt from data-iig-instruction
-        let prompt = img.alt || '';
-        let style = '';
-        const instruction = img.getAttribute('data-iig-instruction');
-        if (instruction) {
-            try {
-                const decoded = instruction
-                    .replace(/&quot;/g, '"')
-                    .replace(/&apos;/g, "'")
-                    .replace(/&#39;/g, "'")
-                    .replace(/&#34;/g, '"')
-                    .replace(/&amp;/g, '&');
-                const data = JSON.parse(decoded);
-                prompt = data.prompt || '';
-                style = data.style || '';
-            } catch { /* keep alt fallback */ }
-        }
+        // Extract prompt from data-iig-instruction (alt as fallback)
+        const data = parseInstructionAttr(img.getAttribute('data-iig-instruction'));
+        const prompt = data ? (data.prompt || '') : (img.alt || '');
+        const style = data?.style || '';
 
         openWithData({ src: img.src, alt: img.alt || '', prompt, style });
     });
@@ -415,14 +383,4 @@ function getTouchDist(touches) {
     const dx = touches[0].clientX - touches[1].clientX;
     const dy = touches[0].clientY - touches[1].clientY;
     return Math.sqrt(dx * dx + dy * dy);
-}
-
-function guessExtension(src) {
-    if (src.startsWith('data:')) {
-        const m = src.match(/^data:image\/([a-z0-9+]+)/i);
-        if (m) return m[1].replace('jpeg', 'jpg');
-    }
-    const m = src.match(/\.([a-z0-9]+)(?:\?|#|$)/i);
-    if (m) return m[1].toLowerCase();
-    return 'png';
 }

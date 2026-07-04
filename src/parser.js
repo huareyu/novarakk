@@ -22,6 +22,7 @@ import {
 } from './settings.js';
 import {
     checkFileExists,
+    decodeHtmlEntities,
     escapeRegex,
     normalizeStoredImagePath,
     sanitizeForHtml,
@@ -362,15 +363,6 @@ const INSTRUCTION_FIELD_NAMES = Object.freeze([
     'quality',
 ]);
 
-export function normalizeInstructionPayload(text) {
-    return String(text || '')
-        .replace(/&quot;/g, '"')
-        .replace(/&apos;/g, "'")
-        .replace(/&#39;/g, "'")
-        .replace(/&#34;/g, '"')
-        .replace(/&amp;/g, '&');
-}
-
 function decodeRelaxedInstructionValue(value) {
     return String(value || '')
         .trim()
@@ -383,7 +375,7 @@ function decodeRelaxedInstructionValue(value) {
 }
 
 function parseRelaxedInstructionObject(payload) {
-    const normalized = normalizeInstructionPayload(payload);
+    const normalized = decodeHtmlEntities(payload);
     const keyRegex = /(["'])(style|prompt|aspect_ratio|aspectRatio|preset|image_size|imageSize|quality)\1\s*:\s*(["'])/g;
     const matches = Array.from(normalized.matchAll(keyRegex));
     if (matches.length === 0) {
@@ -418,7 +410,7 @@ function parseRelaxedInstructionObject(payload) {
 }
 
 export function parseInstructionObject(payload) {
-    const normalized = normalizeInstructionPayload(payload);
+    const normalized = decodeHtmlEntities(payload);
 
     try {
         return JSON.parse(normalized);

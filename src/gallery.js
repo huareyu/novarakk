@@ -12,7 +12,7 @@
 
 import { t } from './i18n.js';
 import { getSettings, iigLog } from './settings.js';
-import { sanitizeForHtml } from './utils.js';
+import { sanitizeForHtml, parseInstructionAttr, downloadImageSrc } from './utils.js';
 import { rerenderMessageHtml } from './parser.js';
 import { openLightboxWithSrc } from './lightbox.js';
 
@@ -44,20 +44,9 @@ function collectChatImages() {
             if (!img.src || img.src.endsWith('[IMG:GEN]')) continue;
             if (img.classList.contains('iig-error-image')) continue;
 
-            let prompt = '';
-            let style = '';
-            const instruction = img.getAttribute('data-iig-instruction');
-            if (instruction) {
-                try {
-                    const decoded = instruction
-                        .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
-                        .replace(/&#39;/g, "'").replace(/&#34;/g, '"')
-                        .replace(/&amp;/g, '&');
-                    const data = JSON.parse(decoded);
-                    prompt = data.prompt || '';
-                    style = data.style || '';
-                } catch { /* ignore */ }
-            }
+            const data = parseInstructionAttr(img.getAttribute('data-iig-instruction'));
+            const prompt = data?.prompt || '';
+            const style = data?.style || '';
 
             const src = img.src;
             const filename = src.includes('/') ? src.split('/').pop() : src;
@@ -686,38 +675,7 @@ function openGalleryLightbox(idx) {
 // ── Download ──
 
 async function downloadGalleryImage(img) {
-    const src = img.src;
-    let url = src;
-    let cleanup = null;
-    if (!src.startsWith('data:')) {
-        try {
-            const resp = await fetch(src);
-            const blob = await resp.blob();
-            url = URL.createObjectURL(blob);
-            cleanup = () => URL.revokeObjectURL(url);
-        } catch (err) {
-            iigLog('ERROR', 'Gallery image download failed:', err);
-            return;
-        }
-    }
-    const ext = guessExtension(src);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = img.filename || `iig_${Date.now()}.${ext}`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    if (cleanup) setTimeout(cleanup, 100);
-}
-
-function guessExtension(src) {
-    if (src.startsWith('data:')) {
-        const m = src.match(/^data:image\/([a-z0-9+]+)/i);
-        if (m) return m[1].replace('jpeg', 'jpg');
-    }
-    const m = src.match(/\.([a-z0-9]+)(?:\?|#|$)/i);
-    if (m) return m[1].toLowerCase();
-    return 'png';
+    await downloadImageSrc(img.src, img.filename || null);
 }
 
 // ── Delete image from chat message ──

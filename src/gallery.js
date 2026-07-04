@@ -12,7 +12,7 @@
 
 import { t } from './i18n.js';
 import { getSettings, iigLog } from './settings.js';
-import { sanitizeForHtml, parseInstructionAttr, downloadImageSrc } from './utils.js';
+import { sanitizeForHtml, parseInstructionAttr, downloadImageSrc, escapeRegex } from './utils.js';
 import { rerenderMessageHtml } from './parser.js';
 import { openLightboxWithSrc } from './lightbox.js';
 
@@ -685,14 +685,41 @@ async function deleteImageFromChat(img) {
     const message = context.chat[img.messageId];
     if (!message) return;
 
-    const srcPattern = img.src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // В message.mes src хранится относительным путём ("user/images/...") без
+    // percent-encoding, а DOM img.src — абсолютный закодированный URL.
+    // Матчим все варианты записи.
+    const variants = new Set([img.src]);
+    if (!img.src.startsWith('data:')) {
+        try {
+            const pathname = new URL(img.src, location.origin).pathname;
+            const decoded = decodeURIComponent(pathname);
+            for (const p of [pathname, decoded]) {
+                variants.add(p);
+                variants.add(p.replace(/^\//, ''));
+            }
+        } catch { /* оставляем только абсолютный src */ }
+    }
+    const srcPattern = Array.from(variants).map(escapeRegex).join('|');
     const imgTagRegex = new RegExp(
-        `<img\\s[^>]*src\\s*=\\s*["']${srcPattern}["'][^>]*>`,
+        `<img\\s[^>]*src\\s*=\\s*["'](?:${srcPattern})["'][^>]*>`,
         'i',
     );
 
-    if (message.mes) message.mes = message.mes.replace(imgTagRegex, '');
-    if (message.extra?.display_text) message.extra.display_text = message.extra.display_text.replace(imgTagRegex, '');
+    const stripTag = (text) => String(text).replace(imgTagRegex, '');
+    if (message.mes) message.mes = stripTag(message.mes);
+    if (message.extra?.display_text) message.extra.display_text = stripTag(message.extra.display_text);
+    if (message.extra?.extblocks) message.extra.extblocks = stripTag(message.extra.extblocks);
+
+    // Зеркала текущего свайпа — иначе картинка «воскресает» после свайпа туда-обратно
+    const swipeId = message.swipe_id;
+    if (swipeId !== undefined) {
+        if (Array.isArray(message.swipes) && typeof message.swipes[swipeId] === 'string') {
+            message.swipes[swipeId] = stripTag(message.swipes[swipeId]);
+        }
+        const swipeExtra = message.swipe_info?.[swipeId]?.extra;
+        if (swipeExtra?.extblocks) swipeExtra.extblocks = stripTag(swipeExtra.extblocks);
+        if (swipeExtra?.display_text) swipeExtra.display_text = stripTag(swipeExtra.display_text);
+    }
 
     const mesEl = document.querySelector(`#chat .mes[mesid="${img.messageId}"]`);
     const mesTextEl = mesEl?.querySelector('.mes_text');

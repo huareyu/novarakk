@@ -1,14 +1,20 @@
 /**
- * Chat Image Gallery — modal overlay showing all generated images
- * in the current chat as a browseable grid with file-manager actions:
+ * Chat Image Gallery — modal overlay showing generated images
+ * as a browseable grid with file-manager actions:
  * view (lightbox), select, bulk download, bulk delete,
  * pagination, sorting, and configurable page size.
+ *
+ * Two scopes, switchable in the header:
+ *   'chat'      — images embedded in messages of the current chat (DOM-based);
+ *   'character' — all image files saved for the current character
+ *                 (user/images/<char name>/, via /api/images/list).
  */
 
 import { t } from './i18n.js';
 import { getSettings, iigLog } from './settings.js';
 import { sanitizeForHtml } from './utils.js';
 import { rerenderMessageHtml } from './parser.js';
+import { openLightboxWithSrc } from './lightbox.js';
 
 const GALLERY_OVERLAY_ID = 'iig_gallery_overlay';
 const PAGE_SIZE_OPTIONS = [6, 12, 24, 48];
@@ -62,6 +68,7 @@ function collectChatImages() {
                 style,
                 messageId,
                 tagIndex: i,
+                order: results.length,
                 filename: filename || `image_${i}`,
                 isUser: !!message.is_user,
                 charName: message.name || '',
@@ -72,6 +79,55 @@ function collectChatImages() {
     return results;
 }
 
+// ── Collect all images of the current character (from disk) ──
+
+async function getCharacterFolder() {
+    const context = SillyTavern.getContext();
+    // Same folder-resolution logic as the upload path in utils.js
+    let charName = 'generated';
+    if (context.characterId !== undefined && context.characters?.[context.characterId]) {
+        charName = context.characters[context.characterId].name || 'generated';
+    }
+    try {
+        const resp = await fetch('/api/files/sanitize-filename', {
+            method: 'POST',
+            headers: context.getRequestHeaders(),
+            body: JSON.stringify({ fileName: charName }),
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.fileName) return data.fileName;
+        }
+    } catch { /* fall back to raw name */ }
+    return charName;
+}
+
+async function collectCharacterImages() {
+    const context = SillyTavern.getContext();
+    const folder = await getCharacterFolder();
+    const resp = await fetch('/api/images/list', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify({ folder, sortField: 'date', sortOrder: 'asc' }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const files = await resp.json();
+    const list = Array.isArray(files) ? files.filter(f => typeof f === 'string') : [];
+
+    return list.map((file, i) => ({
+        src: `user/images/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`,
+        diskPath: `user/images/${folder}/${file}`,
+        prompt: '',
+        style: '',
+        messageId: null,
+        tagIndex: 0,
+        order: i,
+        filename: file,
+        isUser: false,
+        charName: folder,
+    }));
+}
+
 // ── Gallery state ──
 
 let gs = {
@@ -80,6 +136,7 @@ let gs = {
     selectMode: false,
     page: 0,
     sort: 'newest',
+    scope: 'chat', // 'chat' | 'character'
     perPage: DEFAULT_PER_PAGE,
     thumbSize: DEFAULT_THUMB_SIZE,
     showThumbSlider: false,
@@ -88,14 +145,15 @@ let gs = {
 function resetState() {
     const perPage = gs.perPage || DEFAULT_PER_PAGE;
     const thumbSize = gs.thumbSize || DEFAULT_THUMB_SIZE;
-    gs = { images: [], selected: new Set(), selectMode: false, page: 0, sort: 'newest', perPage, thumbSize, showThumbSlider: false };
+    const scope = gs.scope || 'chat';
+    gs = { images: [], selected: new Set(), selectMode: false, page: 0, sort: 'newest', scope, perPage, thumbSize, showThumbSlider: false };
 }
 
 function getSorted() {
     const imgs = gs.images.slice();
     switch (gs.sort) {
         case 'oldest':
-            imgs.sort((a, b) => a.messageId - b.messageId || a.tagIndex - b.tagIndex);
+            imgs.sort((a, b) => a.order - b.order);
             break;
         case 'name-asc':
             imgs.sort((a, b) => a.filename.localeCompare(b.filename));
@@ -104,7 +162,7 @@ function getSorted() {
             imgs.sort((a, b) => b.filename.localeCompare(a.filename));
             break;
         default: // newest
-            imgs.sort((a, b) => b.messageId - a.messageId || b.tagIndex - a.tagIndex);
+            imgs.sort((a, b) => b.order - a.order);
             break;
     }
     return imgs;
@@ -127,13 +185,33 @@ function clampPage() {
 
 // ── Refresh helper ──
 
-function refreshGallery() {
-    gs.images = collectChatImages();
-    gs.selected.clear();
-    clampPage();
+let loadToken = 0;
+
+async function refreshGallery() {
     const overlay = document.getElementById(GALLERY_OVERLAY_ID);
     if (!overlay) return;
     const bodyEl = overlay.querySelector('#iig_gallery_body');
+    const token = ++loadToken;
+    gs.selected.clear();
+
+    if (gs.scope === 'character' && bodyEl) {
+        bodyEl.innerHTML = `<div class="iig-gallery-empty"><i class="fa-solid fa-spinner fa-spin"></i><p>${t`Loading images`}</p></div>`;
+    }
+
+    let images;
+    try {
+        images = gs.scope === 'character' ? await collectCharacterImages() : collectChatImages();
+    } catch (err) {
+        iigLog('ERROR', 'Gallery: failed to load images:', err);
+        if (token === loadToken && bodyEl) {
+            bodyEl.innerHTML = `<div class="iig-gallery-empty"><i class="fa-solid fa-triangle-exclamation"></i><p>${t`Failed to load images`}</p></div>`;
+        }
+        return;
+    }
+
+    if (token !== loadToken || !document.getElementById(GALLERY_OVERLAY_ID)) return;
+    gs.images = images;
+    clampPage();
     updateSelectionUI(overlay);
     if (bodyEl) renderContent(bodyEl);
 }
@@ -143,9 +221,7 @@ function refreshGallery() {
 export function openGallery() {
     if (document.getElementById(GALLERY_OVERLAY_ID)) return;
 
-    const images = collectChatImages();
     resetState();
-    gs.images = images;
 
     const overlay = document.createElement('div');
     overlay.id = GALLERY_OVERLAY_ID;
@@ -160,6 +236,14 @@ export function openGallery() {
                     <i class="fa-solid fa-xmark"></i>
                 </button>
                 <div class="iig-gallery-header-actions">
+                    <div class="iig-gallery-scope" id="iig_gallery_scope">
+                        <button class="iig-gallery-scope-btn ${gs.scope === 'chat' ? 'active' : ''}" data-gallery-scope="chat" type="button" title="${t`Images from current chat`}">
+                            <i class="fa-solid fa-comment"></i> ${t`Chat`}
+                        </button>
+                        <button class="iig-gallery-scope-btn ${gs.scope === 'character' ? 'active' : ''}" data-gallery-scope="character" type="button" title="${t`All images of this character`}">
+                            <i class="fa-solid fa-user"></i> ${t`All`}
+                        </button>
+                    </div>
                     <select class="iig-gallery-sort" id="iig_gallery_sort" title="${t`Sort`}">
                         <option value="newest" selected>${t`Newest`}</option>
                         <option value="oldest">${t`Oldest`}</option>
@@ -216,6 +300,21 @@ export function openGallery() {
     for (const ev of ['click', 'mousedown', 'pointerdown']) {
         modal.addEventListener(ev, (e) => e.stopPropagation());
     }
+
+    // Scope toggle (chat / all character images)
+    overlay.querySelectorAll('[data-gallery-scope]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const scope = btn.getAttribute('data-gallery-scope');
+            if (scope === gs.scope) return;
+            gs.scope = scope;
+            gs.page = 0;
+            gs.selected.clear();
+            overlay.querySelectorAll('[data-gallery-scope]').forEach((b) => {
+                b.classList.toggle('active', b.getAttribute('data-gallery-scope') === gs.scope);
+            });
+            refreshGallery();
+        });
+    });
 
     // Sort
     overlay.querySelector('#iig_gallery_sort').addEventListener('change', (e) => {
@@ -283,14 +382,14 @@ export function openGallery() {
         if (!confirmed) return;
 
         for (const img of selected) {
-            await deleteImageFromChat(img);
+            await deleteGalleryImage(img);
         }
 
-        refreshGallery();
+        await refreshGallery();
         toastr.success(`${t`Delete selected`}: ${selected.length}`, t`Gallery`, { timeOut: 2000 });
     });
 
-    renderContent(bodyEl);
+    refreshGallery();
     updateCount(overlay);
 }
 
@@ -343,7 +442,8 @@ function renderContent(bodyEl) {
     const overlay = document.getElementById(GALLERY_OVERLAY_ID);
 
     if (sorted.length === 0) {
-        bodyEl.innerHTML = `<div class="iig-gallery-empty"><i class="fa-regular fa-image"></i><p>${t`No generated images in this chat`}</p></div>`;
+        const emptyText = gs.scope === 'character' ? t`No images found for this character` : t`No generated images in this chat`;
+        bodyEl.innerHTML = `<div class="iig-gallery-empty"><i class="fa-regular fa-image"></i><p>${emptyText}</p></div>`;
         if (overlay) renderFooter(overlay.querySelector('#iig_gallery_footer'));
         return;
     }
@@ -363,7 +463,7 @@ function renderContent(bodyEl) {
                     ${gs.selectMode ? `<div class="iig-gallery-checkbox ${isSelected ? 'checked' : ''}"><i class="fa-${isSelected ? 'solid fa-square-check' : 'regular fa-square'}"></i></div>` : ''}
                 </div>
                 <div class="iig-gallery-card-info">
-                    <span class="iig-gallery-card-msg" title="${t`Message`} #${img.messageId}">#${img.messageId} · ${sanitizeForHtml(img.charName)}</span>
+                    ${img.messageId !== null ? `<span class="iig-gallery-card-msg" title="${t`Message`} #${img.messageId}">#${img.messageId} · ${sanitizeForHtml(img.charName)}</span>` : ''}
                     <span class="iig-gallery-card-filename" title="${sanitizeForHtml(img.filename)}">${sanitizeForHtml(img.filename)}</span>
                     ${promptShort ? `<span class="iig-gallery-card-prompt" title="${sanitizeForHtml(img.prompt)}">${sanitizeForHtml(promptShort)}</span>` : ''}
                 </div>
@@ -522,15 +622,39 @@ async function handleSingleDelete(idx) {
     const sorted = getSorted();
     const img = sorted[idx];
     if (!img) return;
-    const confirmed = confirm(t`Delete this image from chat?`);
+    const confirmText = img.messageId === null ? t`Delete this image file from disk?` : t`Delete this image from chat?`;
+    const confirmed = confirm(confirmText);
     if (!confirmed) return;
 
-    await deleteImageFromChat(img);
-    refreshGallery();
+    await deleteGalleryImage(img);
+    await refreshGallery();
     toastr.success(t`Image deleted`, t`Gallery`, { timeOut: 2000 });
 }
 
+async function deleteGalleryImage(img) {
+    if (img.messageId === null) {
+        await deleteImageFile(img);
+    } else {
+        await deleteImageFromChat(img);
+    }
+}
+
 // ── Lightbox from gallery ──
+
+function restoreOverlayWhenLightboxCloses(overlay) {
+    const lightbox = document.getElementById('iig_lightbox');
+    if (lightbox && lightbox.classList.contains('open')) {
+        const observer = new MutationObserver(() => {
+            if (!lightbox.classList.contains('open')) {
+                observer.disconnect();
+                if (overlay) overlay.style.display = '';
+            }
+        });
+        observer.observe(lightbox, { attributes: true, attributeFilter: ['class'] });
+    } else {
+        if (overlay) overlay.style.display = '';
+    }
+}
 
 function openGalleryLightbox(idx) {
     const sorted = getSorted();
@@ -540,25 +664,20 @@ function openGalleryLightbox(idx) {
     const overlay = document.getElementById(GALLERY_OVERLAY_ID);
     if (overlay) overlay.style.display = 'none';
 
+    // Disk files (character scope) aren't tied to a chat message — open directly
+    if (img.messageId === null) {
+        openLightboxWithSrc(img.src, img.prompt, img.style);
+        restoreOverlayWhenLightboxCloses(overlay);
+        return;
+    }
+
     const mesEl = document.querySelector(`#chat .mes[mesid="${img.messageId}"]`);
     if (!mesEl) { if (overlay) overlay.style.display = ''; return; }
     const imgs = mesEl.querySelectorAll('img[data-iig-instruction]');
     const target = imgs[img.tagIndex];
     if (target && !target.classList.contains('iig-error-image')) {
         target.click();
-
-        const lightbox = document.getElementById('iig_lightbox');
-        if (lightbox) {
-            const observer = new MutationObserver(() => {
-                if (!lightbox.classList.contains('open')) {
-                    observer.disconnect();
-                    if (overlay) overlay.style.display = '';
-                }
-            });
-            observer.observe(lightbox, { attributes: true, attributeFilter: ['class'] });
-        } else {
-            if (overlay) overlay.style.display = '';
-        }
+        restoreOverlayWhenLightboxCloses(overlay);
     } else {
         if (overlay) overlay.style.display = '';
     }
@@ -637,6 +756,22 @@ async function deleteImageFromChat(img) {
         } catch (err) {
             iigLog('WARN', 'Gallery: failed to delete image file:', err);
         }
+    }
+}
+
+// ── Delete image file from disk (character scope) ──
+
+async function deleteImageFile(img) {
+    if (!img.diskPath) return;
+    const context = SillyTavern.getContext();
+    try {
+        await fetch('/api/images/delete', {
+            method: 'POST',
+            headers: context.getRequestHeaders(),
+            body: JSON.stringify({ path: img.diskPath }),
+        });
+    } catch (err) {
+        iigLog('WARN', 'Gallery: failed to delete image file:', err);
     }
 }
 

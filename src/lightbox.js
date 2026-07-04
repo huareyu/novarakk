@@ -16,6 +16,20 @@ const OVERLAY_ID = 'iig_lightbox';
 const MIN_SCALE = 1;
 const MAX_SCALE = 8;
 
+/** Устанавливается в initLightbox; позволяет открывать лайтбокс напрямую по src (галерея). */
+let openWithDataFn = null;
+
+/**
+ * Открывает лайтбокс для произвольного изображения (не привязанного к сообщению чата).
+ * @param {string} src - URL изображения
+ * @param {string} [prompt] - Промпт (если известен)
+ * @param {string} [style] - Стиль (если известен)
+ */
+export function openLightboxWithSrc(src, prompt = '', style = '') {
+    if (!src) return;
+    openWithDataFn?.({ src, prompt, style });
+}
+
 let state = {
     scale: 1,
     translateX: 0,
@@ -331,47 +345,16 @@ export function initLightbox() {
         }
     });
 
-    // --- Delegation: click on chat images ---
-    const chatEl = document.getElementById('chat');
-    chatEl?.addEventListener('click', (e) => {
-        const target = /** @type {HTMLElement} */ (e.target);
-        const img = /** @type {HTMLImageElement|null} */ (
-            target?.closest('.iig-generated-image') || target?.closest('img[data-iig-instruction]')
-        );
-        if (!img) return;
-        if (img.classList.contains('iig-error-image')) return;
-
-        e.preventDefault();
-        e.stopPropagation();
-
+    // --- Open with arbitrary data (chat click + gallery) ---
+    function openWithData({ src, alt = '', prompt = '', style = '' }) {
         resetState();
-        state.imgSrc = img.src;
+        state.imgSrc = src;
+        state.prompt = prompt;
+        state.style = style;
 
-        imgEl.src = img.src;
-        imgEl.alt = img.alt || '';
+        imgEl.src = src;
+        imgEl.alt = alt;
         imgEl.style.transform = '';
-
-        // Extract prompt from data-iig-instruction
-        const instruction = img.getAttribute('data-iig-instruction');
-        if (instruction) {
-            try {
-                const decoded = instruction
-                    .replace(/&quot;/g, '"')
-                    .replace(/&apos;/g, "'")
-                    .replace(/&#39;/g, "'")
-                    .replace(/&#34;/g, '"')
-                    .replace(/&amp;/g, '&');
-                const data = JSON.parse(decoded);
-                state.prompt = data.prompt || '';
-                state.style = data.style || '';
-            } catch {
-                state.prompt = img.alt || '';
-                state.style = '';
-            }
-        } else {
-            state.prompt = img.alt || '';
-            state.style = '';
-        }
 
         promptTextEl.textContent = state.prompt || t`No prompt available`;
         if (state.style) {
@@ -390,6 +373,41 @@ export function initLightbox() {
         overlay.classList.add('open');
         overlay.setAttribute('aria-hidden', 'false');
         document.body.style.overflow = 'hidden';
+    }
+    openWithDataFn = openWithData;
+
+    // --- Delegation: click on chat images ---
+    const chatEl = document.getElementById('chat');
+    chatEl?.addEventListener('click', (e) => {
+        const target = /** @type {HTMLElement} */ (e.target);
+        const img = /** @type {HTMLImageElement|null} */ (
+            target?.closest('.iig-generated-image') || target?.closest('img[data-iig-instruction]')
+        );
+        if (!img) return;
+        if (img.classList.contains('iig-error-image')) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Extract prompt from data-iig-instruction
+        let prompt = img.alt || '';
+        let style = '';
+        const instruction = img.getAttribute('data-iig-instruction');
+        if (instruction) {
+            try {
+                const decoded = instruction
+                    .replace(/&quot;/g, '"')
+                    .replace(/&apos;/g, "'")
+                    .replace(/&#39;/g, "'")
+                    .replace(/&#34;/g, '"')
+                    .replace(/&amp;/g, '&');
+                const data = JSON.parse(decoded);
+                prompt = data.prompt || '';
+                style = data.style || '';
+            } catch { /* keep alt fallback */ }
+        }
+
+        openWithData({ src: img.src, alt: img.alt || '', prompt, style });
     });
 }
 

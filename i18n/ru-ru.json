@@ -361,5 +361,13 @@
     "Sort": "Сортировка",
     "Newest": "Новые",
     "Oldest": "Старые",
-    "Per page": "На странице"
+    "Per page": "На странице",
+    "Chat": "Чат",
+    "All": "Все",
+    "Images from current chat": "Картинки из текущего чата",
+    "All images of this character": "Все картинки этого бота",
+    "No images found for this character": "У этого бота нет сохранённых картинок",
+    "Delete this image file from disk?": "Удалить этот файл картинки с диска?",
+    "Loading images": "Загрузка картинок…",
+    "Failed to load images": "Не удалось загрузить картинки"
 }

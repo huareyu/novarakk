@@ -274,5 +274,13 @@
     "Sort": "Сортування",
     "Newest": "Нові",
     "Oldest": "Старі",
-    "Per page": "На сторінці"
+    "Per page": "На сторінці",
+    "Chat": "Чат",
+    "All": "Усі",
+    "Images from current chat": "Зображення з поточного чату",
+    "All images of this character": "Усі зображення цього бота",
+    "No images found for this character": "У цього бота немає збережених зображень",
+    "Delete this image file from disk?": "Видалити цей файл зображення з диска?",
+    "Loading images": "Завантаження зображень…",
+    "Failed to load images": "Не вдалося завантажити зображення"
 }

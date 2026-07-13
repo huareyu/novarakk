@@ -318,6 +318,17 @@ export function updateAvatarAppearanceInjection() {
  * Возвращает массив строк готовых к push в `references` массив провайдера.
  */
 export async function collectExtraReferences(prompt, format = 'base64') {
+    const objects = await collectExtraReferenceObjects(prompt, format);
+    return objects.map((ref) => ref.image);
+}
+
+/**
+ * Как collectExtraReferences, но с метаданными о происхождении каждой
+ * картинки: `{ image, kind, name }`, где kind — 'npc' | 'outfit-char' |
+ * 'outfit-user'. Нужно провайдерам, которые подписывают референсы в промпте
+ * («Image N is X's FACE...») — без подписей модель путает аутфиты с лицами.
+ */
+export async function collectExtraReferenceObjects(prompt, format = 'base64') {
     const settings = getSettings();
     const refs = [];
 
@@ -326,26 +337,18 @@ export async function collectExtraReferences(prompt, format = 'base64') {
     if (settings.autoDetectNames !== false) {
         for (const npc of getMatchedNpcs(prompt)) {
             if (!npc?.avatarData) continue;
-            refs.push(wrap(npc.avatarData));
+            refs.push({ image: wrap(npc.avatarData), kind: 'npc', name: String(npc.name || 'NPC') });
         }
     }
 
     // Wardrobe v4: send active outfit images as references
     if (settings.swSendOutfitImageBot !== false) {
-        const botImg = await getActiveOutfitBase64('bot');
-        if (botImg) refs.push(wrap(botImg));
-        else {
-            const collage = await getCollageBase64('bot');
-            if (collage) refs.push(wrap(collage));
-        }
+        const botImg = await getActiveOutfitBase64('bot') || await getCollageBase64('bot');
+        if (botImg) refs.push({ image: wrap(botImg), kind: 'outfit-char', name: '' });
     }
     if (settings.swSendOutfitImageUser !== false) {
-        const userImg = await getActiveOutfitBase64('user');
-        if (userImg) refs.push(wrap(userImg));
-        else {
-            const collage = await getCollageBase64('user');
-            if (collage) refs.push(wrap(collage));
-        }
+        const userImg = await getActiveOutfitBase64('user') || await getCollageBase64('user');
+        if (userImg) refs.push({ image: wrap(userImg), kind: 'outfit-user', name: '' });
     }
 
     return refs;

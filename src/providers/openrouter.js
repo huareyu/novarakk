@@ -212,7 +212,7 @@ export class OpenRouterProvider extends Provider {
                     'X-Title': 'SillyTavern Inline Image Generation',
                 },
                 body: JSON.stringify(body),
-            }, OPENROUTER_REQUEST_TIMEOUT_MS);
+            }, OPENROUTER_REQUEST_TIMEOUT_MS, options.signal);
         } catch (error) {
             throwAsProviderError(error, `OpenRouter ${model}`, 'openrouter');
         }

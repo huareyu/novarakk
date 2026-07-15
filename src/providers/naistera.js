@@ -146,6 +146,7 @@ export class NaisteraProvider extends Provider {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(body),
+                signal: options.signal,
             });
         } catch (error) {
             const pageOrigin = window.location.origin;

@@ -302,7 +302,7 @@ export class VoidProvider extends Provider {
                 cache: 'no-store',
                 mode: 'cors',
                 body: JSON.stringify(body),
-            }, VOID_REQUEST_TIMEOUT_MS);
+            }, VOID_REQUEST_TIMEOUT_MS, options.signal);
         } catch (error) {
             throwAsProviderError(error, `Void ${model}`, 'void');
         }

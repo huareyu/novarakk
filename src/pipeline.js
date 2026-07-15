@@ -250,12 +250,27 @@ export const processingMessages = new Set();
 
 export function createLoadingPlaceholder(tagId) {
     const placeholder = document.createElement('div');
+    const abortController = new AbortController();
     placeholder.className = 'iig-loading-placeholder';
     placeholder.dataset.tagId = tagId;
+    placeholder._abortController = abortController;
     placeholder.innerHTML = `
         <div class="iig-spinner"></div>
         <div class="iig-status"><span class="iig-status-label">${t`Generating image...`}</span> <span class="iig-status-timer"></span></div>
+        <button type="button" class="iig-cancel-generation" title="${t`Cancel generation`}"><i class="fa-solid fa-circle-stop"></i><span>${t`Stop generation`}</span></button>
     `;
+
+    const cancelButton = placeholder.querySelector('.iig-cancel-generation');
+    cancelButton?.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (abortController.signal.aborted) return;
+        cancelButton.disabled = true;
+        placeholder.classList.add('iig-generation-cancelling');
+        const label = placeholder.querySelector('.iig-status-label');
+        if (label) label.textContent = t`Cancelling...`;
+        abortController.abort(new DOMException(t`Generation cancelled by user`, 'AbortError'));
+    });
 
     const timerEl = placeholder.querySelector('.iig-status-timer');
     const startedAt = Date.now();
@@ -272,6 +287,21 @@ export function createLoadingPlaceholder(tagId) {
     updateTimer();
     placeholder._timerInterval = setInterval(updateTimer, 1000);
     return placeholder;
+}
+
+function getLoadingSignal(placeholder) {
+    return placeholder?._abortController?.signal || null;
+}
+
+function finishLoadingGeneration(placeholder) {
+    const signal = getLoadingSignal(placeholder);
+    if (signal?.aborted) throw signal.reason || new DOMException(t`Generation cancelled by user`, 'AbortError');
+    const cancelButton = placeholder?.querySelector('.iig-cancel-generation');
+    if (cancelButton) cancelButton.disabled = true;
+}
+
+function isGenerationCancelled(error, signal = null) {
+    return !!signal?.aborted || error?.name === 'AbortError' || error?.code === 'generation_cancelled';
 }
 
 export function clearLoadingPlaceholderTimer(placeholder) {
@@ -407,6 +437,9 @@ export async function generateImageWithRetry(prompt, style, onStatusUpdate, opti
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
+            if (options.signal?.aborted) {
+                throw options.signal.reason || new DOMException(t`Generation cancelled by user`, 'AbortError');
+            }
             const statusText = attempt > 0
                 ? t`Generating (retry ${attempt}/${maxRetries})...`
                 : t`Generating...`;
@@ -451,6 +484,10 @@ export async function generateImageWithRetry(prompt, style, onStatusUpdate, opti
             lastError = error;
             console.error(`[IIG] Generation attempt ${attempt + 1} failed:`, error);
 
+            if (isGenerationCancelled(error, options.signal)) {
+                throw options.signal?.reason || error;
+            }
+
             // ProviderError даёт `retryable` явно. Для прочих ошибок (напр.
             // всплывших из saveImageToFile / внутренностей JS) — fallback на
             // прежнюю regex-эвристику, чтобы не потерять привычное поведение.
@@ -472,7 +509,13 @@ export async function generateImageWithRetry(prompt, style, onStatusUpdate, opti
 
             const delay = baseDelay * Math.pow(2, attempt);
             onStatusUpdate?.(t`Retry in ${delay / 1000}s...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
+            await new Promise((resolve, reject) => {
+                const timer = setTimeout(resolve, delay);
+                options.signal?.addEventListener('abort', () => {
+                    clearTimeout(timer);
+                    reject(options.signal.reason || new DOMException(t`Generation cancelled by user`, 'AbortError'));
+                }, { once: true });
+            });
         }
     }
 
@@ -631,8 +674,9 @@ export async function processMessageTags(messageId) {
                 tag.prompt,
                 tag.style,
                 (status) => { statusEl.textContent = status; },
-                { aspectRatio: tag.aspectRatio, imageSize: tag.imageSize, quality: tag.quality, preset: tag.preset, messageId }
+                { aspectRatio: tag.aspectRatio, imageSize: tag.imageSize, quality: tag.quality, preset: tag.preset, messageId, signal: getLoadingSignal(loadingPlaceholder) }
             );
+            finishLoadingGeneration(loadingPlaceholder);
             clearLoadingPlaceholderTimer(loadingPlaceholder);
 
             const { persistedSrc, persistedPosterSrc } = await persistGeneratedMedia(
@@ -665,8 +709,11 @@ export async function processMessageTags(messageId) {
             toastr.success(readyMsg, t`Image Generation`, { timeOut: 2000 });
         } catch (error) {
             clearLoadingPlaceholderTimer(loadingPlaceholder);
-            iigLog('ERROR', `Failed to generate image for tag ${index}:`, error.message);
-            const friendly = formatProviderError(error);
+            const cancelled = isGenerationCancelled(error, getLoadingSignal(loadingPlaceholder));
+            iigLog(cancelled ? 'INFO' : 'ERROR', `${cancelled ? 'Cancelled' : 'Failed to generate'} image for tag ${index}:`, error.message);
+            const friendly = cancelled
+                ? { title: t`Generation cancelled`, message: t`Generation was cancelled by the user.`, detail: '' }
+                : formatProviderError(error);
 
             const errorPlaceholder = createErrorPlaceholder(tagId, error.message, tag, friendly);
             loadingPlaceholder.replaceWith(errorPlaceholder);
@@ -681,7 +728,8 @@ export async function processMessageTags(messageId) {
             }
             iigLog('INFO', `Marked tag as failed in message.mes`);
 
-            toastr.error(friendly.message, friendly.title);
+            if (cancelled) toastr.info(friendly.message, friendly.title, { timeOut: 2500 });
+            else toastr.error(friendly.message, friendly.title);
         }
     };
 
@@ -772,8 +820,9 @@ export async function regenerateSingleTag(messageId, tagIndex) {
             tag.prompt,
             tag.style,
             (status) => { statusEl.textContent = status; },
-            { aspectRatio: tag.aspectRatio, imageSize: tag.imageSize, quality: tag.quality, preset: tag.preset, messageId }
+            { aspectRatio: tag.aspectRatio, imageSize: tag.imageSize, quality: tag.quality, preset: tag.preset, messageId, signal: getLoadingSignal(loadingPlaceholder) }
         );
+        finishLoadingGeneration(loadingPlaceholder);
         clearLoadingPlaceholderTimer(loadingPlaceholder);
 
         const { persistedSrc, persistedPosterSrc } = await persistGeneratedMedia(
@@ -802,9 +851,13 @@ export async function regenerateSingleTag(messageId, tagIndex) {
         toastr.success(readyMsg, t`Image Generation`, { timeOut: 2000 });
     } catch (error) {
         clearLoadingPlaceholderTimer(loadingPlaceholder);
-        iigLog('ERROR', `Single-tag regeneration failed for tag ${tagIndex}:`, error);
-        const friendly = formatProviderError(error);
-        toastr.error(friendly.message, friendly.title);
+        const cancelled = isGenerationCancelled(error, getLoadingSignal(loadingPlaceholder));
+        iigLog(cancelled ? 'INFO' : 'ERROR', `Single-tag regeneration ${cancelled ? 'cancelled' : 'failed'} for tag ${tagIndex}:`, error);
+        if (cancelled) toastr.info(t`Generation was cancelled by the user.`, t`Generation cancelled`, { timeOut: 2500 });
+        else {
+            const friendly = formatProviderError(error);
+            toastr.error(friendly.message, friendly.title);
+        }
     } finally {
         processingMessages.delete(messageId);
         await context.saveChat();
@@ -880,8 +933,9 @@ export async function regenerateMessageImages(messageId) {
                         tag.prompt,
                         tag.style,
                         (status) => { statusEl.textContent = status; },
-                        { aspectRatio: tag.aspectRatio, imageSize: tag.imageSize, quality: tag.quality, preset: tag.preset, messageId }
+                        { aspectRatio: tag.aspectRatio, imageSize: tag.imageSize, quality: tag.quality, preset: tag.preset, messageId, signal: getLoadingSignal(loadingPlaceholder) }
                     );
+                    finishLoadingGeneration(loadingPlaceholder);
                     clearLoadingPlaceholderTimer(loadingPlaceholder);
 
                     const { persistedSrc, persistedPosterSrc } = await persistGeneratedMedia(
@@ -912,9 +966,15 @@ export async function regenerateMessageImages(messageId) {
             } catch (error) {
                 const activePlaceholder = mesTextEl.querySelector(`[data-tag-id="${tagId}"]`);
                 clearLoadingPlaceholderTimer(activePlaceholder);
-                iigLog('ERROR', `Regeneration failed for tag ${index}:`, error.message);
-                const friendly = formatProviderError(error);
-                toastr.error(friendly.message, friendly.title);
+                const cancelled = isGenerationCancelled(error, getLoadingSignal(activePlaceholder));
+                iigLog(cancelled ? 'INFO' : 'ERROR', `Regeneration ${cancelled ? 'cancelled' : 'failed'} for tag ${index}:`, error.message);
+                if (cancelled) {
+                    toastr.info(t`Generation was cancelled by the user.`, t`Generation cancelled`, { timeOut: 2500 });
+                    break;
+                } else {
+                    const friendly = formatProviderError(error);
+                    toastr.error(friendly.message, friendly.title);
+                }
             }
         }
     } finally {

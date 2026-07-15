@@ -287,5 +287,12 @@
     "Bottom input bar": "Нижня панель введення",
     "Magic wand menu": "Меню чарівної палички",
     "Both locations": "В обох місцях",
-    "Hidden": "Приховати"
+    "Hidden": "Приховати",
+    "Cancel generation": "Перервати генерацію",
+    "Cancel": "Перервати",
+    "Cancelling...": "Переривання…",
+    "Generation cancelled by user": "Генерацію перервано користувачем",
+    "Generation cancelled": "Генерацію перервано",
+    "Generation was cancelled by the user.": "Генерацію було перервано користувачем.",
+    "Stop generation": "Перервати"
 }

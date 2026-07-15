@@ -289,7 +289,7 @@ export class GeminiProvider extends Provider {
                     'Content-Type': 'application/json',
                 },
                 body: bodyJson,
-            }, GEMINI_REQUEST_TIMEOUT_MS);
+            }, GEMINI_REQUEST_TIMEOUT_MS, options.signal);
         } catch (error) {
             throwAsProviderError(error, `Gemini ${model}`, 'gemini');
         }

@@ -374,5 +374,12 @@
     "Bottom input bar": "Нижняя панель ввода",
     "Magic wand menu": "Меню волшебной палочки",
     "Both locations": "В обоих местах",
-    "Hidden": "Скрыть"
+    "Hidden": "Скрыть",
+    "Cancel generation": "Прервать генерацию",
+    "Cancel": "Прервать",
+    "Cancelling...": "Прерывание…",
+    "Generation cancelled by user": "Генерация прервана пользователем",
+    "Generation cancelled": "Генерация прервана",
+    "Generation was cancelled by the user.": "Генерация была прервана пользователем.",
+    "Stop generation": "Прервать"
 }

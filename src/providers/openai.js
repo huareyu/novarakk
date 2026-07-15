@@ -141,6 +141,7 @@ export class OpenAIProvider extends Provider {
                 size: requestedSize,
                 quality,
                 references,
+                signal: options.signal,
             });
         }
 
@@ -152,10 +153,11 @@ export class OpenAIProvider extends Provider {
             prompt: fullPrompt,
             size: requestedSize,
             quality,
+            signal: options.signal,
         });
     }
 
-    async _generateWithGenerations({ url, apiKey, model, modelKind, prompt, size, quality }) {
+    async _generateWithGenerations({ url, apiKey, model, modelKind, prompt, size, quality, signal }) {
 
         const body = {
             model,
@@ -181,7 +183,7 @@ export class OpenAIProvider extends Provider {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(body),
-            }, OPENAI_REQUEST_TIMEOUT_MS);
+            }, OPENAI_REQUEST_TIMEOUT_MS, signal);
         } catch (error) {
             throwAsProviderError(error, `OpenAI /v1/images/generations (${url})`, 'openai');
         }
@@ -201,7 +203,7 @@ export class OpenAIProvider extends Provider {
         return extractImageFromResult(result);
     }
 
-    async _generateWithEdits({ url, apiKey, model, modelKind, prompt, size, quality, references }) {
+    async _generateWithEdits({ url, apiKey, model, modelKind, prompt, size, quality, references, signal }) {
         const form = new FormData();
 
         form.append('model', model);
@@ -233,7 +235,7 @@ export class OpenAIProvider extends Provider {
                     'Authorization': `Bearer ${apiKey}`,
                 },
                 body: form,
-            }, OPENAI_REQUEST_TIMEOUT_MS);
+            }, OPENAI_REQUEST_TIMEOUT_MS, signal);
         } catch (error) {
             throwAsProviderError(error, `OpenAI /v1/images/edits (${url})`, 'openai');
         }

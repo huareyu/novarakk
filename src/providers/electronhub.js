@@ -180,13 +180,14 @@ export class ElectronHubProvider extends OpenAIProvider {
             negativePrompt,
             guidanceScale,
             steps,
+            signal: options.signal,
         });
     }
 
     /**
      * /v1/images/generations с ElectronHub-специфичными параметрами.
      */
-    async _generateWithGenerationsElectronHub({ url, apiKey, model, prompt, size, electronhubStyle, negativePrompt, guidanceScale, steps }) {
+    async _generateWithGenerationsElectronHub({ url, apiKey, model, prompt, size, electronhubStyle, negativePrompt, guidanceScale, steps, signal }) {
         const body = {
             model,
             prompt,
@@ -214,7 +215,7 @@ export class ElectronHubProvider extends OpenAIProvider {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(body),
-            }, ELECTRONHUB_REQUEST_TIMEOUT_MS);
+            }, ELECTRONHUB_REQUEST_TIMEOUT_MS, signal);
         } catch (error) {
             throwAsProviderError(error, `ElectronHub /v1/images/generations (${url})`, 'electronhub');
         }

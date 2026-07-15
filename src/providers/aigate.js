@@ -223,7 +223,7 @@ export class AIGateProvider extends Provider {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(body),
-            }, AIGATE_REQUEST_TIMEOUT_MS);
+            }, AIGATE_REQUEST_TIMEOUT_MS, options.signal);
         } catch (error) {
             throwAsProviderError(error, `AIGate ${model}`, 'aigate');
         }
@@ -298,7 +298,7 @@ export class AIGateProvider extends Provider {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(body),
-            }, AIGATE_REQUEST_TIMEOUT_MS);
+            }, AIGATE_REQUEST_TIMEOUT_MS, options.signal);
         } catch (error) {
             throwAsProviderError(error, `AIGate /v1/images/generations`, 'aigate');
         }
@@ -342,7 +342,7 @@ export class AIGateProvider extends Provider {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${settings.apiKey}` },
                 body: form,
-            }, AIGATE_REQUEST_TIMEOUT_MS);
+            }, AIGATE_REQUEST_TIMEOUT_MS, options.signal);
         } catch (error) {
             throwAsProviderError(error, `AIGate /v1/images/edits`, 'aigate');
         }

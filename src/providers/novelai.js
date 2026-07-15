@@ -83,7 +83,7 @@ export class NovelAIProvider extends Provider {
                 method: 'POST',
                 headers: getRequestHeaders(),
                 body: JSON.stringify(body),
-            }, 600_000);
+            }, 600_000, options.signal);
         } catch (error) {
             throwAsProviderError(error, 'NovelAI (ST proxy)', 'novelai');
         }

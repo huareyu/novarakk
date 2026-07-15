@@ -313,10 +313,15 @@ export function buildReferencesSettingsSectionHtml(settings = getSettings()) {
                 </div>
             </div>
 
-            <label class="checkbox_label" title="${t`Shows a wardrobe button in the input bar for quick access.`}">
-                <input type="checkbox" id="iig_show_floating_wardrobe" ${settings.showFloatingWardrobeBtn ? 'checked' : ''}>
-                <span>${t`Show wardrobe button in input bar`}</span>
-            </label>
+            <div class="iig-wardrobe-button-placement">
+                <label for="iig_wardrobe_button_placement">${t`Wardrobe button location`}</label>
+                <select id="iig_wardrobe_button_placement" class="text_pole">
+                    <option value="bar" ${settings.wardrobeButtonPlacement === 'bar' ? 'selected' : ''}>${t`Bottom input bar`}</option>
+                    <option value="wand" ${settings.wardrobeButtonPlacement === 'wand' ? 'selected' : ''}>${t`Magic wand menu`}</option>
+                    <option value="both" ${settings.wardrobeButtonPlacement === 'both' ? 'selected' : ''}>${t`Both locations`}</option>
+                    <option value="hidden" ${settings.wardrobeButtonPlacement === 'hidden' ? 'selected' : ''}>${t`Hidden`}</option>
+                </select>
+            </div>
         </div>
     `;
 

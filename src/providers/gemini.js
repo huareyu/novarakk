@@ -27,7 +27,7 @@ import {
     getReferenceDescription,
     getReferenceSource,
 } from '../references.js';
-import { collectExtraReferenceObjects, getActiveAvatarItem } from '../extras.js';
+import { collectExtraReferenceObjects, getActiveAvatarItem, getWardrobeAvatarOverrideBase64 } from '../extras.js';
 import {
     Provider,
     buildGenerationUrl,
@@ -127,13 +127,13 @@ export class GeminiProvider extends Provider {
         };
 
         if (settings.sendCharAvatar) {
-            const charAvatar = await getCharacterAvatarBase64();
+            const charAvatar = await getWardrobeAvatarOverrideBase64('bot') || await getCharacterAvatarBase64();
             if (charAvatar) {
                 refs.push(makeReferenceObject(charAvatar, `is ${charName}'s FACE and appearance — preserve this face exactly${appearanceAnchor('char')}`, 'char-avatar'));
             }
         }
         if (settings.sendUserAvatar) {
-            const userAvatar = await getUserAvatarBase64();
+            const userAvatar = await getWardrobeAvatarOverrideBase64('user') || await getUserAvatarBase64();
             if (userAvatar) {
                 refs.push(makeReferenceObject(userAvatar, `is ${userName}'s FACE and appearance — preserve this face exactly${appearanceAnchor('user')}`, 'user-avatar'));
             }

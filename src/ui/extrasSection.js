@@ -578,9 +578,10 @@ export function bindExtrasEvents(settings) {
         updateWardrobeInjection();
     });
 
-    document.getElementById('iig_show_floating_wardrobe')?.addEventListener('change', (e) => {
-        if (!(e.target instanceof HTMLInputElement)) return;
-        settings.showFloatingWardrobeBtn = e.target.checked;
+    document.getElementById('iig_wardrobe_button_placement')?.addEventListener('change', (e) => {
+        if (!(e.target instanceof HTMLSelectElement)) return;
+        const allowed = new Set(['bar', 'wand', 'both', 'hidden']);
+        settings.wardrobeButtonPlacement = allowed.has(e.target.value) ? e.target.value : 'bar';
         saveSettings();
         swInjectBarBtn();
     });

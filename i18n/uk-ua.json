@@ -282,5 +282,10 @@
     "No images found for this character": "У цього бота немає збережених зображень",
     "Delete this image file from disk?": "Видалити цей файл зображення з диска?",
     "Loading images": "Завантаження зображень…",
-    "Failed to load images": "Не вдалося завантажити зображення"
+    "Failed to load images": "Не вдалося завантажити зображення",
+    "Wardrobe button location": "Розташування кнопки гардероба",
+    "Bottom input bar": "Нижня панель введення",
+    "Magic wand menu": "Меню чарівної палички",
+    "Both locations": "В обох місцях",
+    "Hidden": "Приховати"
 }

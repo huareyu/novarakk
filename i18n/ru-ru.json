@@ -369,5 +369,10 @@
     "No images found for this character": "У этого бота нет сохранённых картинок",
     "Delete this image file from disk?": "Удалить этот файл картинки с диска?",
     "Loading images": "Загрузка картинок…",
-    "Failed to load images": "Не удалось загрузить картинки"
+    "Failed to load images": "Не удалось загрузить картинки",
+    "Wardrobe button location": "Расположение кнопки гардероба",
+    "Bottom input bar": "Нижняя панель ввода",
+    "Magic wand menu": "Меню волшебной палочки",
+    "Both locations": "В обоих местах",
+    "Hidden": "Скрыть"
 }

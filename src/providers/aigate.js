@@ -29,7 +29,7 @@ import {
     getUserAvatarDataUrl,
     collectPreviousContextReferences,
 } from '../references.js';
-import { collectExtraReferences } from '../extras.js';
+import { collectExtraReferences, getWardrobeAvatarOverrideBase64 } from '../extras.js';
 import {
     Provider,
     buildGenerationUrl,
@@ -114,11 +114,13 @@ export class AIGateProvider extends Provider {
         const getUser = format === 'dataUrl' ? getUserAvatarDataUrl : getUserAvatarBase64;
 
         if (settings.sendCharAvatar) {
-            const d = await getChar();
+            const override = await getWardrobeAvatarOverrideBase64('bot');
+            const d = override ? (format === 'dataUrl' ? `data:image/png;base64,${override}` : override) : await getChar();
             if (d) refs.push(d);
         }
         if (settings.sendUserAvatar) {
-            const d = await getUser();
+            const override = await getWardrobeAvatarOverrideBase64('user');
+            const d = override ? (format === 'dataUrl' ? `data:image/png;base64,${override}` : override) : await getUser();
             if (d) refs.push(d);
         }
 

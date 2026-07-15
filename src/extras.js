@@ -24,6 +24,7 @@ import {
     getActiveOutfitDescription,
     getCollageBase64,
     getActiveOutfitData,
+    isActiveOutfitTryOn,
 } from './wardrobe.js';
 
 // ----- ID generators -----
@@ -172,6 +173,12 @@ export function getMatchedNpcs(prompt) {
 // ============================================================
 
 export { swUpdatePromptInjection as updateWardrobeInjection };
+
+export async function getWardrobeAvatarOverrideBase64(side) {
+    const normalized = side === 'bot' ? 'bot' : 'user';
+    if (!isActiveOutfitTryOn(normalized)) return null;
+    return await getActiveOutfitBase64(normalized);
+}
 
 // ============================================================
 // Avatar Library (кастомные аватарки персонажа/юзера)
@@ -343,11 +350,15 @@ export async function collectExtraReferenceObjects(prompt, format = 'base64') {
 
     // Wardrobe v4: send active outfit images as references
     if (settings.swSendOutfitImageBot !== false) {
-        const botImg = await getActiveOutfitBase64('bot') || await getCollageBase64('bot');
+        const botTryOnUsedAsAvatar = isActiveOutfitTryOn('bot')
+            && (settings.apiType === 'naistera' ? settings.naisteraSendCharAvatar : settings.sendCharAvatar);
+        const botImg = botTryOnUsedAsAvatar ? null : (await getActiveOutfitBase64('bot') || await getCollageBase64('bot'));
         if (botImg) refs.push({ image: wrap(botImg), kind: 'outfit-char', name: '' });
     }
     if (settings.swSendOutfitImageUser !== false) {
-        const userImg = await getActiveOutfitBase64('user') || await getCollageBase64('user');
+        const userTryOnUsedAsAvatar = isActiveOutfitTryOn('user')
+            && (settings.apiType === 'naistera' ? settings.naisteraSendUserAvatar : settings.sendUserAvatar);
+        const userImg = userTryOnUsedAsAvatar ? null : (await getActiveOutfitBase64('user') || await getCollageBase64('user'));
         if (userImg) refs.push({ image: wrap(userImg), kind: 'outfit-user', name: '' });
     }
 

@@ -24,7 +24,7 @@ import {
     getUserAvatarBase64,
     collectPreviousContextReferences,
 } from '../references.js';
-import { collectExtraReferences } from '../extras.js';
+import { collectExtraReferences, getWardrobeAvatarOverrideBase64 } from '../extras.js';
 import {
     Provider,
     buildGenerationUrl,
@@ -66,11 +66,11 @@ export class OpenAIProvider extends Provider {
         const refs = [];
 
         if (settings.sendCharAvatar) {
-            const charAvatar = await getCharacterAvatarBase64();
+            const charAvatar = await getWardrobeAvatarOverrideBase64('bot') || await getCharacterAvatarBase64();
             if (charAvatar) refs.push(charAvatar);
         }
         if (settings.sendUserAvatar) {
-            const userAvatar = await getUserAvatarBase64();
+            const userAvatar = await getWardrobeAvatarOverrideBase64('user') || await getUserAvatarBase64();
             if (userAvatar) refs.push(userAvatar);
         }
 

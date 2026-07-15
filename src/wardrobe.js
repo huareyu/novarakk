@@ -62,6 +62,9 @@ const swDefaults = Object.freeze({
     sharedUserWardrobe: [], sharedUserActive: null, sharedUserActiveByChat: {}, useSharedUserWardrobe: false,
     sharedBotWardrobe:  [], sharedBotActive:  null, sharedBotActiveByChat:  {}, useSharedBotWardrobe:  false,
     maxDimension: 512, showFloatingBtn: false,
+    tryOnPrompt: '',
+    genLookPrompt: '',
+    tryOnAsAvatar: true,
 });
 
 // ── Settings ──
@@ -433,18 +436,40 @@ async function swGetPersonRefB64(side) {
     return await getUserAvatarBase64();
 }
 
-function swBuildTryOnPrompt(side, outfitDesc) {
+const SW_DEFAULT_TRYON_PROMPT =
+    'Virtual outfit try-on. Generate a FULL-BODY, head-to-toe image of {{name}} — the exact person from the {{personRef}} image — wearing EXACTLY the outfit from the {{outfitRef}} image.'
+    + ' Keep the face, hairstyle, hair color, eye color, skin tone and body proportions identical to the person reference.'
+    + ' Replace ALL of their clothing with the referenced outfit: same garments, colors, fabrics, patterns, accessories and footwear.'
+    + ' CRITICAL — keep the same art style: render the result in the EXACT SAME art style, medium, line work, shading, color palette and overall aesthetic as the {{personRef}} image, as if drawn by the same artist. Do NOT switch to photography, 3D render or any different illustration style.'
+    + ' Natural relaxed standing pose facing the viewer, the entire figure visible from head to shoes, simple uncluttered background that does not distract from the character.'
+    + ' {{outfit}}';
+
+const SW_DEFAULT_GENLOOK_PROMPT =
+    'Virtual outfit design. Generate a FULL-BODY, head-to-toe image of {{name}} — the exact person from the {{personRef}} image — wearing a NEW outfit that matches the text description below.'
+    + ' Keep the face, hairstyle, hair color, eye color, skin tone and body proportions identical to the person reference.'
+    + ' Replace ALL of their clothing with the described outfit: follow the description for garments, colors, fabrics, patterns, accessories and footwear; tastefully fill in any unspecified details so the outfit looks complete and coherent.'
+    + ' CRITICAL — keep the same art style: render the result in the EXACT SAME art style, medium, line work, shading, color palette and overall aesthetic as the {{personRef}} image, as if drawn by the same artist. Do NOT switch to photography, 3D render or any different illustration style.'
+    + ' Natural relaxed standing pose facing the viewer, the entire figure visible from head to shoes, simple uncluttered background that does not distract from the character.'
+    + ' {{outfit}}';
+
+function swBuildTryOnPrompt(side, outfitDesc, { fromDescription = false } = {}) {
     const ctx = SillyTavern.getContext();
     const name = side === 'bot' ? (swCharName() || 'the character') : (ctx.name1 || 'the user');
     const personRef = side === 'bot' ? 'CHARACTER REFERENCE' : 'USER REFERENCE';
     const outfitRef = side === 'bot' ? 'CHARACTER OUTFIT REFERENCE' : 'USER OUTFIT REFERENCE';
-    let p = `Virtual outfit try-on. Generate a FULL-BODY, head-to-toe image of ${name} — the exact person from the ${personRef} image — wearing EXACTLY the outfit from the ${outfitRef} image.`;
-    p += ' Keep the face, hairstyle, hair color, eye color, skin tone and body proportions identical to the person reference.';
-    p += ' Replace ALL of their clothing with the referenced outfit: same garments, colors, fabrics, patterns, accessories and footwear.';
-    p += ' Standing in a relaxed pose facing the viewer, entire figure visible from head to shoes, clean neutral studio background, soft even lighting, fashion lookbook style.';
+    const s = swGetSettings();
+    const template = fromDescription
+        ? ((s.genLookPrompt || '').trim() || SW_DEFAULT_GENLOOK_PROMPT)
+        : ((s.tryOnPrompt || '').trim() || SW_DEFAULT_TRYON_PROMPT);
     const d = swSanitizeDesc(outfitDesc);
-    if (d) p += ` Outfit details: ${d}`;
-    return p;
+    const outfit = d ? `${fromDescription ? 'Outfit description' : 'Outfit details'}: ${d}` : '';
+    return template
+        .replaceAll('{{name}}', () => name)
+        .replaceAll('{{personRef}}', personRef)
+        .replaceAll('{{outfitRef}}', outfitRef)
+        .replaceAll('{{outfit}}', () => outfit)
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
 }
 
 async function swTryOnGenerate(side, outfitB64, outfitDesc) {
@@ -460,8 +485,13 @@ async function swTryOnGenerate(side, outfitB64, outfitDesc) {
             : 'Нет референса персоны: выберите аватар персоны в ST');
     }
 
-    const references = [personB64, outfitB64];
-    const prompt = swBuildTryOnPrompt(side, outfitDesc);
+    const fromDescription = !outfitB64;
+    const rawReferences = fromDescription ? [personB64] : [personB64, outfitB64];
+    const dataUrlProviders = new Set(['openrouter', 'void', 'aigate', 'naistera']);
+    const references = dataUrlProviders.has(provider.id)
+        ? rawReferences.map((b64) => `data:image/png;base64,${b64}`)
+        : rawReferences;
+    const prompt = swBuildTryOnPrompt(side, outfitDesc, { fromDescription });
 
     const generated = await provider.generate({
         prompt,
@@ -470,13 +500,12 @@ async function swTryOnGenerate(side, outfitB64, outfitDesc) {
         options: { aspectRatio: '2:3' },
     });
 
-    if (typeof generated === 'string' && /^https?:\/\//i.test(generated)) {
-        return await imageUrlToDataUrl(generated);
-    }
-    if (typeof generated !== 'string' || !generated.startsWith('data:image/')) {
+    let output = generated;
+    if (typeof output === 'string' && /^https?:\/\//i.test(output)) output = await imageUrlToDataUrl(output);
+    if (typeof output !== 'string' || !output.startsWith('data:image/')) {
         throw new Error('API вернул не картинку (примерка поддерживает только изображения)');
     }
-    const png = await convertDataUrlToPng(generated);
+    const png = await convertDataUrlToPng(output);
     return parseImageDataUrl(png).base64Data;
 }
 
@@ -581,17 +610,20 @@ function swRender() {
     if (swPage < 0) swPage = 0;
     const pageItems = shown.slice(swPage * SW_PAGE_SIZE, (swPage + 1) * SW_PAGE_SIZE);
 
-    h += '<div class="sw-outfit-grid"><div class="sw-outfit-card sw-upload-card" id="sw-upload-trigger"><div class="sw-upload-icon"><i class="fa-solid fa-plus"></i></div><span>Загрузить</span></div>';
+    h += '<div class="sw-outfit-grid"><div class="sw-outfit-card sw-upload-card" id="sw-upload-trigger"><div class="sw-upload-icon"><i class="fa-solid fa-plus"></i></div><span>Загрузить</span></div>'
+        + '<div class="sw-outfit-card sw-upload-card" id="sw-gen-trigger" title="Сгенерировать образ по текстовому описанию (ИИ): референсом уходит только аватар"><div class="sw-upload-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div><span>Сгенерировать</span></div>';
     for (const o of pageItems) {
         const a = o.id === aid;
         const oDesc = swSanitizeDesc(o.description);
         const tm = swTypeMeta(swTypeOf(o));
         const opts = swTypes().map(t => `<option value="${t.id}" ${swTypeOf(o) === t.id ? 'selected' : ''}>${esc(t.label)}</option>`).join('');
+        const tryOnBadge = o.tryOnSide ? `<div class="sw-tryon-badge" title="Примерка на ${o.tryOnSide === 'bot' ? 'персонажа' : 'персону'}"><i class="fa-solid fa-person-rays"></i></div>` : '';
         h += `<div class="sw-outfit-card ${a ? 'sw-outfit-active' : ''}" data-id="${o.id}">
-            <div class="sw-outfit-img-wrap"><img src="${esc(swImgSrc(o))}" alt="${esc(o.name)}" class="sw-outfit-img" loading="lazy">${a ? '<div class="sw-active-badge"><i class="fa-solid fa-check"></i></div>' : ''}<div class="sw-type-badge" title="${esc(tm.label)}"><i class="fa-solid ${tm.icon}"></i></div></div>
+            <div class="sw-outfit-img-wrap"><img src="${esc(swImgSrc(o))}" alt="${esc(o.name)}" class="sw-outfit-img" loading="lazy">${a ? '<div class="sw-active-badge"><i class="fa-solid fa-check"></i></div>' : ''}<div class="sw-type-badge" title="${esc(tm.label)}"><i class="fa-solid ${tm.icon}"></i></div>${tryOnBadge}</div>
             <div class="sw-outfit-footer"><span class="sw-outfit-name" title="${esc(oDesc || o.name)}">${esc(o.name)}</span>
                 <div class="sw-outfit-btns">
                     <div class="sw-btn-activate" title="${a ? 'Снять' : 'Надеть'}"><i class="fa-solid ${a ? 'fa-toggle-on' : 'fa-toggle-off'}"></i></div>
+                    <div class="sw-btn-tryon ${o.tryOnSide ? 'sw-tryon-on' : ''}" title="${o.tryOnSide ? 'Сделать обычным нарядом' : 'Пометить как ИИ-примерку'}"><i class="fa-solid fa-person-rays"></i></div>
                     <div class="sw-btn-edit" title="Редактировать"><i class="fa-solid fa-pen"></i></div>
                     <div class="sw-btn-delete" title="Удалить"><i class="fa-solid fa-trash-can"></i></div>
                 </div></div>
@@ -648,10 +680,18 @@ function swRender() {
     });
 
     document.getElementById('sw-upload-trigger')?.addEventListener('click', swUpload);
+    document.getElementById('sw-gen-trigger')?.addEventListener('click', () => swOpenOutfitForm({ mode: 'gen', view: swCurrentView() }));
     for (const card of c.querySelectorAll('.sw-outfit-card[data-id]')) {
         const id = card.dataset.id;
         card.querySelector('.sw-outfit-img')?.addEventListener('click', (e) => { e.preventDefault(); e.stopImmediatePropagation(); swToggle(id); });
         card.querySelector('.sw-btn-activate')?.addEventListener('click', (e) => { e.preventDefault(); e.stopImmediatePropagation(); swToggle(id); });
+        card.querySelector('.sw-btn-tryon')?.addEventListener('click', (e) => {
+            e.preventDefault(); e.stopImmediatePropagation();
+            const o = v.find(id); if (!o) return;
+            if (o.tryOnSide) delete o.tryOnSide;
+            else o.tryOnSide = v.side;
+            swSave(); swRender();
+        });
         card.querySelector('.sw-btn-edit')?.addEventListener('click', (e) => { e.preventDefault(); e.stopImmediatePropagation(); swEdit(id); });
         card.querySelector('.sw-btn-delete')?.addEventListener('click', (e) => {
             e.preventDefault(); e.stopImmediatePropagation();
@@ -706,8 +746,9 @@ function swEdit(id) {
 function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName = '' }) {
     document.getElementById('sw-form-overlay')?.remove();
     const isEdit = mode === 'edit';
+    const isGen = mode === 'gen';
     const curType = isEdit ? swTypeOf(item) : (swTypeIds().includes(swFilter) ? swFilter : 'other');
-    const previewSrc = isEdit ? swImgSrc(item) : ('data:image/png;base64,' + base64);
+    const previewSrc = isEdit ? swImgSrc(item) : (base64 ? 'data:image/png;base64,' + base64 : '');
     const curName = isEdit ? (item.name || '') : (defaultName || '');
     const curDesc = isEdit ? swSanitizeDesc(item.description) : '';
 
@@ -719,15 +760,15 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
     ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
     const panel = document.createElement('div'); panel.id = 'sw-form';
     panel.innerHTML = `
-        <div class="sw-form-header"><span>${isEdit ? 'Редактировать образ' : 'Новый образ'}</span><div class="sw-form-close" title="Закрыть"><i class="fa-solid fa-xmark"></i></div></div>
+        <div class="sw-form-header"><span>${isEdit ? 'Редактировать образ' : (isGen ? 'Образ по описанию' : 'Новый образ')}</span><div class="sw-form-close" title="Закрыть"><i class="fa-solid fa-xmark"></i></div></div>
         <div class="sw-form-body">
-            <div class="sw-form-preview"><img src="${esc(previewSrc)}" alt="preview"></div>
+            <div class="sw-form-preview"><img src="${esc(previewSrc)}" alt="preview" ${isGen ? 'hidden' : ''}>${isGen ? '<div class="sw-form-preview-empty" id="sw-gen-empty"><i class="fa-solid fa-wand-magic-sparkles"></i><span>Опишите образ и нажмите «Сгенерировать»</span></div>' : ''}</div>
             <div class="sw-tryon-row">
-                <select class="text_pole sw-tryon-select" id="sw-tryon-target" title="На кого примерить наряд">
+                <select class="text_pole sw-tryon-select" id="sw-tryon-target" title="${isGen ? 'На кого сгенерировать образ' : 'На кого примерить наряд'}">
                     <option value="bot" ${view.side === 'bot' ? 'selected' : ''}>На персонажа — ${esc(charNm)}</option>
                     <option value="user" ${view.side === 'user' ? 'selected' : ''}>На персону — ${esc(userNm)}</option>
                 </select>
-                <div class="sw-tryon-btn" id="sw-tryon-btn" title="Сгенерировать фулбоди-картинку: персонаж в этом наряде (ИИ)"><i class="fa-solid fa-person-rays"></i> Примерить</div>
+                <div class="sw-tryon-btn" id="sw-tryon-btn"><i class="fa-solid ${isGen ? 'fa-wand-magic-sparkles' : 'fa-person-rays'}"></i> ${isGen ? 'Сгенерировать' : 'Примерить'}</div>
             </div>
             <div class="sw-tryon-status" id="sw-tryon-status" hidden></div>
             <div class="sw-tryon-pick" id="sw-tryon-pick" hidden>
@@ -739,7 +780,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
             <label class="sw-form-label">Тип одежды</label>
             <select class="text_pole sw-form-input" id="sw-form-type">${swTypes().map(t => `<option value="${t.id}" ${curType === t.id ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}</select>
             <label class="sw-form-label">Описание <span class="sw-form-ai" id="sw-form-ai" title="Сгенерировать описание по картинке (ИИ)"><i class="fa-solid fa-wand-magic-sparkles"></i> ИИ</span></label>
-            <textarea class="text_pole sw-form-textarea" id="sw-form-desc" rows="4" placeholder="Что на образе: одежда, цвета, ткани, аксессуары…">${esc(curDesc)}</textarea>
+            <textarea class="text_pole sw-form-textarea" id="sw-form-desc" rows="4" placeholder="${isGen ? 'Опишите образ: одежда, цвета, ткани, аксессуары, обувь…' : 'Что на образе: одежда, цвета, ткани, аксессуары…'}">${esc(curDesc)}</textarea>
             <div class="sw-form-actions">
                 <div class="sw-form-btn sw-form-cancel">Отмена</div>
                 <div class="sw-form-btn sw-form-save">${isEdit ? 'Сохранить' : 'Добавить'}</div>
@@ -766,8 +807,8 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         if (aiBtn.classList.contains('sw-form-ai-loading')) return;
         aiBtn.classList.add('sw-form-ai-loading');
         try {
-            const b64 = await getFormImageB64();
-            if (!b64) { toastr.warning('Нет картинки для анализа', 'Гардероб'); return; }
+            const b64 = isGen ? genB64 : await getFormImageB64();
+            if (!b64) { toastr.warning(isGen ? 'Сначала сгенерируйте образ' : 'Нет картинки для анализа', 'Гардероб'); return; }
             const desc = await swAnalyzeOutfit(b64);
             if (desc) panel.querySelector('#sw-form-desc').value = desc;
             else toastr.warning('Не удалось получить описание', 'Гардероб');
@@ -778,19 +819,22 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
     // Try-on
     let genB64 = null;
     let picked = 'orig';
+    let genSide = null;
     const previewImg = panel.querySelector('.sw-form-preview img');
     const tryBtn = panel.querySelector('#sw-tryon-btn');
     const tryStatus = panel.querySelector('#sw-tryon-status');
     const tryPick = panel.querySelector('#sw-tryon-pick');
 
     function refreshTryOnUI() {
-        tryPick.hidden = !genB64;
+        tryPick.hidden = !genB64 || isGen;
         if (genB64) {
-            tryPick.querySelector('[data-pick="orig"] img').src = previewSrc;
+            if (!isGen) tryPick.querySelector('[data-pick="orig"] img').src = previewSrc;
             tryPick.querySelector('[data-pick="gen"] img').src = 'data:image/png;base64,' + genB64;
             for (const o of tryPick.querySelectorAll('.sw-tryon-opt')) o.classList.toggle('sw-tryon-sel', o.dataset.pick === picked);
         }
         previewImg.src = (picked === 'gen' && genB64) ? ('data:image/png;base64,' + genB64) : previewSrc;
+        previewImg.hidden = !previewImg.src;
+        panel.querySelector('#sw-gen-empty')?.toggleAttribute('hidden', !!genB64);
     }
 
     for (const o of tryPick.querySelectorAll('.sw-tryon-opt')) {
@@ -804,16 +848,17 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         tryBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Генерация…';
         tryStatus.hidden = false; tryStatus.textContent = 'Готовим референсы…';
         try {
-            const srcB64 = await getFormImageB64();
-            if (!srcB64) throw new Error('Не удалось получить картинку наряда');
             const descNow = panel.querySelector('#sw-form-desc').value.trim();
-            tryStatus.textContent = 'Генерация примерки… (обычно 15–60 секунд)';
+            if (isGen && !descNow) throw new Error('Сначала опишите образ');
+            const srcB64 = isGen ? null : await getFormImageB64();
+            if (!isGen && !srcB64) throw new Error('Не удалось получить картинку наряда');
+            tryStatus.textContent = `${isGen ? 'Генерация образа' : 'Генерация примерки'}… (обычно 15–60 секунд)`;
             const out = await swTryOnGenerate(side, srcB64, descNow);
             if (!document.body.contains(panel)) return;
-            genB64 = out; picked = 'gen';
+            genB64 = out; genSide = side; picked = 'gen';
             refreshTryOnUI();
             tryStatus.hidden = true;
-            toastr.success('Примерка готова. Ниже выберите, какую картинку сохранить в гардероб', 'Гардероб', { timeOut: 4000 });
+            toastr.success(isGen ? 'Образ готов — заполните название и сохраните его' : 'Примерка готова. Выберите картинку для сохранения', 'Гардероб', { timeOut: 4000 });
         } catch (e) {
             iigLog('ERROR', 'try-on failed:', e);
             if (document.body.contains(panel)) { tryStatus.hidden = false; tryStatus.textContent = '⚠ ' + String(e.message || e); }
@@ -821,7 +866,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         } finally {
             if (document.body.contains(panel)) {
                 tryBtn.classList.remove('sw-tryon-busy');
-                tryBtn.innerHTML = '<i class="fa-solid fa-person-rays"></i> Примерить';
+                tryBtn.innerHTML = `<i class="fa-solid ${isGen ? 'fa-wand-magic-sparkles' : 'fa-person-rays'}"></i> ${isGen ? 'Сгенерировать' : 'Примерить'}`;
             }
         }
     });
@@ -833,6 +878,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         const type = panel.querySelector('#sw-form-type').value;
         const desc = panel.querySelector('#sw-form-desc').value.trim();
         const saveBtn = panel.querySelector('.sw-form-save');
+        if (isGen && !genB64) { toastr.warning('Сначала сгенерируйте образ', 'Гардероб'); return; }
         saveBtn.classList.add('sw-form-btn-busy'); saveBtn.textContent = 'Сохранение…';
         try {
             const useGen = picked === 'gen' && !!genB64;
@@ -850,6 +896,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
                         } catch (err) { iigLog('WARN', 'try-on file store failed, fallback to base64:', err.message); }
                     }
                     if (!stored) { item.base64 = await swShrinkForStore(genB64); delete item.imagePath; }
+                    if (genSide) item.tryOnSide = genSide;
                     swSharedCache[view.side].b64 = null; swSharedCache[view.side].id = null;
                 }
                 swSave();
@@ -857,6 +904,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
             } else {
                 const newItem = { id: uid(), name, type, description: desc, addedAt: Date.now() };
                 const imgB64 = useGen ? genB64 : base64;
+                if (useGen && genSide) newItem.tryOnSide = genSide;
                 if (view.shared) {
                     let stored = false;
                     try {
@@ -945,6 +993,16 @@ function swOpenQuickSettings() {
                 <div class="sw-quick-hint">«Другое» удалить нельзя — это запасной тег. При удалении тега все его наряды переносятся в «Другое».</div>
             </div>
 
+            <div class="sw-quick-tryon">
+                <label class="sw-quick-tags-title"><i class="fa-solid fa-person-rays"></i> Промт примерки <span class="sw-tryon-prompt-reset" id="sw-q-tryon-reset"><i class="fa-solid fa-rotate-left"></i> Сбросить</span></label>
+                <textarea id="sw-q-tryon-prompt" class="text_pole sw-tryon-prompt-area" rows="7">${esc(swGetSettings().tryOnPrompt || SW_DEFAULT_TRYON_PROMPT)}</textarea>
+                <div class="sw-quick-hint sw-tryon-prompt-hint">Плейсхолдеры: <code>{{name}}</code>, <code>{{personRef}}</code>, <code>{{outfitRef}}</code>, <code>{{outfit}}</code>.</div>
+                <label class="sw-quick-tags-title" style="margin-top:10px;"><i class="fa-solid fa-wand-magic-sparkles"></i> Промт образа по описанию <span class="sw-tryon-prompt-reset" id="sw-q-genlook-reset"><i class="fa-solid fa-rotate-left"></i> Сбросить</span></label>
+                <textarea id="sw-q-genlook-prompt" class="text_pole sw-tryon-prompt-area" rows="7">${esc(swGetSettings().genLookPrompt || SW_DEFAULT_GENLOOK_PROMPT)}</textarea>
+                <div class="sw-quick-hint sw-tryon-prompt-hint">Образ создаётся по описанию, референсом служит аватар выбранной стороны.</div>
+                <label class="sw-quick-check" style="margin-top:8px;"><input type="checkbox" id="sw-q-tryon-avatar" ${swGetSettings().tryOnAsAvatar ? 'checked' : ''}><span>Примерка → аватар-референс</span></label>
+            </div>
+
             <div class="sw-quick-hint">Настройки сохраняются автоматически и синхронизируются с панелью расширения.</div>
         </div>`;
 
@@ -962,6 +1020,25 @@ function swOpenQuickSettings() {
         swRenderTagManager(tagsList);
         if (swOpen) swRender();
         tagsList.querySelector(`.sw-tag-row[data-id="${tag.id}"] .sw-tag-name`)?.focus();
+    });
+
+    const bindPrompt = (areaId, resetId, key, fallback, message) => {
+        const area = panel.querySelector(areaId);
+        area?.addEventListener('input', () => {
+            const value = area.value;
+            swGetSettings()[key] = value.trim() && value.trim() !== fallback.trim() ? value : '';
+            swSave();
+        });
+        panel.querySelector(resetId)?.addEventListener('click', () => {
+            swGetSettings()[key] = ''; swSave();
+            if (area) area.value = fallback;
+            toastr.info(message, 'Гардероб', { timeOut: 2000 });
+        });
+    };
+    bindPrompt('#sw-q-tryon-prompt', '#sw-q-tryon-reset', 'tryOnPrompt', SW_DEFAULT_TRYON_PROMPT, 'Промт примерки сброшен');
+    bindPrompt('#sw-q-genlook-prompt', '#sw-q-genlook-reset', 'genLookPrompt', SW_DEFAULT_GENLOOK_PROMPT, 'Промт образа сброшен');
+    panel.querySelector('#sw-q-tryon-avatar')?.addEventListener('change', (e) => {
+        swGetSettings().tryOnAsAvatar = e.target.checked; swSave();
     });
 
     const save = () => ctx.saveSettingsDebounced();
@@ -1274,15 +1351,59 @@ export function swUpdatePromptInjection() {
     } catch (e) { iigLog('ERROR', 'Failed to update prompt injection:', e.message); }
 }
 
-// ── Bar button ──
+// ── Wardrobe launch buttons ──
+
+const SW_BUTTON_PLACEMENTS = new Set(['bar', 'wand', 'both', 'hidden']);
+
+function swButtonPlacement() {
+    const value = getSettings().wardrobeButtonPlacement;
+    return SW_BUTTON_PLACEMENTS.has(value) ? value : 'bar';
+}
+
+function swActiveCount() {
+    return (swGetActiveBotOutfit() ? 1 : 0) + (swGetActiveUserOutfit() ? 1 : 0);
+}
+
+function swSyncWandBtn(show) {
+    let btn = document.getElementById('iig_wardrobe_wand_button');
+    if (!show) { btn?.remove(); return; }
+
+    const menu = document.getElementById('extensionsMenu');
+    if (!menu) return;
+
+    if (!btn) {
+        btn = document.createElement('div');
+        btn.id = 'iig_wardrobe_wand_button';
+        btn.className = 'list-group-item flex-container flexGap5';
+        btn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            swOpenModal();
+        });
+        menu.appendChild(btn);
+    }
+
+    const count = swActiveCount();
+    btn.classList.toggle('sw-wand-active', count > 0);
+    btn.innerHTML = `<div class="fa-solid fa-shirt extensionsMenuExtensionButton"></div><span>Гардероб${count ? ` (${count})` : ''}</span>`;
+}
 
 export function swInjectBarBtn() {
-    const settings = swGetSettings();
-    if (settings.showFloatingBtn) {
+    const placement = swButtonPlacement();
+    const wantBar = placement === 'bar' || placement === 'both';
+    const wantWand = placement === 'wand' || placement === 'both';
+
+    swSyncWandBtn(wantWand);
+
+    if (!wantBar) {
         $('#sw-bar-btn').remove();
-        swInjectFloatBtn();
+        $('#sw-float-btn').remove();
         return;
     }
+
+    // Remove the deprecated free-floating button: placement is now governed
+    // exclusively by wardrobeButtonPlacement.
+    $('#sw-float-btn').remove();
 
     let $btn = $('#sw-bar-btn');
     if ($btn.length === 0) {
@@ -1291,18 +1412,15 @@ export function swInjectBarBtn() {
         const $left = $('#leftSendForm');
         if ($left.length) $left.append($btn); else $('body').append($btn);
     }
-    const hasBot = !!swGetActiveBotOutfit();
-    const hasUser = !!swGetActiveUserOutfit();
-    const hasActive = hasBot || hasUser;
+    const count = swActiveCount();
+    const hasActive = count > 0;
     $btn.toggleClass('sw-bar-active', hasActive);
     if (hasActive) {
-        const count = (hasBot ? 1 : 0) + (hasUser ? 1 : 0);
         $btn.html(`<i class="fa-solid fa-shirt"></i><span class="sw-bar-count">${count}</span>`);
     } else {
         $btn.html('<i class="fa-solid fa-shirt"></i>');
     }
     $btn.show();
-    swInjectFloatBtn();
 }
 
 function swInjectFloatBtn() {
@@ -1367,6 +1485,12 @@ export async function getCollageBase64(_type) {
 export function getActiveOutfitData(type) {
     const side = type === 'bot' ? 'bot' : 'user';
     return swGetActiveSideOutfit(side);
+}
+
+export function isActiveOutfitTryOn(type) {
+    const side = type === 'bot' ? 'bot' : 'user';
+    if (!swGetSettings().tryOnAsAvatar) return false;
+    return swGetActiveSideOutfit(side)?.tryOnSide === side;
 }
 
 // ── Init ──

@@ -27,7 +27,7 @@ import {
     getUserAvatarDataUrl,
     collectPreviousContextReferences,
 } from '../references.js';
-import { collectExtraReferences } from '../extras.js';
+import { collectExtraReferences, getWardrobeAvatarOverrideBase64 } from '../extras.js';
 import { Provider, resolveLockedSetting } from './base.js';
 
 export class NaisteraProvider extends Provider {
@@ -67,11 +67,13 @@ export class NaisteraProvider extends Provider {
         const refs = [];
 
         if (settings.naisteraSendCharAvatar) {
-            const d = await getCharacterAvatarDataUrl();
+            const override = await getWardrobeAvatarOverrideBase64('bot');
+            const d = override ? `data:image/png;base64,${override}` : await getCharacterAvatarDataUrl();
             if (d) refs.push(d);
         }
         if (settings.naisteraSendUserAvatar) {
-            const d = await getUserAvatarDataUrl();
+            const override = await getWardrobeAvatarOverrideBase64('user');
+            const d = override ? `data:image/png;base64,${override}` : await getUserAvatarDataUrl();
             if (d) refs.push(d);
         }
 

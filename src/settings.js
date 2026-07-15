@@ -183,7 +183,9 @@ export const defaultSettings = Object.freeze({
     visionApiKey: '',
     visionModel: '',
     visionPrompt: '',
-    // Кнопка гардероба в панели ввода (по умолчанию выключена).
+    // Размещение кнопки гардероба: bar | wand | both | hidden.
+    wardrobeButtonPlacement: 'bar',
+    // Legacy key kept for compatibility with older settings.
     showFloatingWardrobeBtn: false,
 });
 

@@ -27,7 +27,7 @@ import {
     getUserAvatarDataUrl,
     collectPreviousContextReferences,
 } from '../references.js';
-import { collectExtraReferences } from '../extras.js';
+import { collectExtraReferences, getWardrobeAvatarOverrideBase64 } from '../extras.js';
 import {
     Provider,
     buildGenerationUrl,
@@ -216,11 +216,13 @@ export class VoidProvider extends Provider {
         const refs = [];
 
         if (settings.sendCharAvatar) {
-            const d = await getCharacterAvatarDataUrl();
+            const override = await getWardrobeAvatarOverrideBase64('bot');
+            const d = override ? `data:image/png;base64,${override}` : await getCharacterAvatarDataUrl();
             if (d) refs.push(d);
         }
         if (settings.sendUserAvatar) {
-            const d = await getUserAvatarDataUrl();
+            const override = await getWardrobeAvatarOverrideBase64('user');
+            const d = override ? `data:image/png;base64,${override}` : await getUserAvatarDataUrl();
             if (d) refs.push(d);
         }
 

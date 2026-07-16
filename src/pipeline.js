@@ -245,6 +245,20 @@ function buildRequestSnapshot({ prompt, style, references, matchedAdditionalRefs
 // Set of messageIds currently being processed (shared between processMessageTags
 // and regenerate to prevent double-runs).
 export const processingMessages = new Set();
+const activeSingleTagTasks = new Set();
+let chatSaveQueue = Promise.resolve();
+
+function singleTagTaskKey(messageId, tagIndex) {
+    return `${messageId}:${tagIndex}`;
+}
+
+function queueChatSave(context) {
+    const next = chatSaveQueue
+        .catch(() => undefined)
+        .then(() => context.saveChat());
+    chatSaveQueue = next;
+    return next;
+}
 
 // ----- Placeholder DOM helpers -----
 
@@ -696,6 +710,7 @@ export async function processMessageTags(messageId) {
             if (instructionValue) {
                 mediaElement.setAttribute('data-iig-instruction', instructionValue);
             }
+            mediaElement.dataset.iigTagIndex = String(index);
 
             loadingPlaceholder.replaceWith(mediaElement);
 
@@ -716,6 +731,7 @@ export async function processMessageTags(messageId) {
                 : formatProviderError(error);
 
             const errorPlaceholder = createErrorPlaceholder(tagId, error.message, tag, friendly);
+            errorPlaceholder.dataset.iigTagIndex = String(index);
             loadingPlaceholder.replaceWith(errorPlaceholder);
 
             // IMPORTANT: Mark tag as failed in message.mes so it displays after swipe.
@@ -741,7 +757,7 @@ export async function processMessageTags(messageId) {
         iigLog('INFO', `Finished processing message ${messageId}`);
     }
 
-    await context.saveChat();
+    await queueChatSave(context);
 
     if (typeof context.messageFormatting === 'function') {
         rerenderMessageHtml(context, message, settings, messageId, mesTextEl);
@@ -773,18 +789,19 @@ export async function regenerateSingleTag(messageId, tagIndex) {
         return;
     }
 
-    if (processingMessages.has(messageId)) {
-        toastr.info(t`Message is already being processed`, t`Image Generation`);
+    const taskKey = singleTagTaskKey(messageId, tagIndex);
+    if (activeSingleTagTasks.has(taskKey)) {
+        toastr.info(t`This image is already being processed`, t`Image Generation`);
         return;
     }
 
-    processingMessages.add(messageId);
+    activeSingleTagTasks.add(taskKey);
 
     const messageElement = document.querySelector(`#chat .mes[mesid="${messageId}"]`);
     const mesTextEl = messageElement?.querySelector('.mes_text');
 
     if (!mesTextEl) {
-        processingMessages.delete(messageId);
+        activeSingleTagTasks.delete(taskKey);
         return;
     }
 
@@ -797,12 +814,16 @@ export async function regenerateSingleTag(messageId, tagIndex) {
     const tagId = `iig-regen-${messageId}-${tagIndex}`;
     applyConfiguredStyleToTag(tag, settings);
     let loadingPlaceholder = null;
+    let existingMedia = null;
+    let succeeded = false;
 
     try {
         const existingMediaList = Array.from(
             mesTextEl.querySelectorAll('img[data-iig-instruction], video[data-iig-instruction]')
         );
-        const existingMedia = existingMediaList[tagIndex] || null;
+        existingMedia = existingMediaList.find((media) => Number.parseInt(media.dataset.iigTagIndex || '', 10) === tagIndex)
+            || existingMediaList[tagIndex]
+            || null;
 
         if (!existingMedia) {
             throw new Error(`Media element at index ${tagIndex} not found in DOM`);
@@ -841,16 +862,19 @@ export async function regenerateSingleTag(messageId, tagIndex) {
         if (instruction) {
             mediaElement.setAttribute('data-iig-instruction', instruction);
         }
+        mediaElement.dataset.iigTagIndex = String(tagIndex);
 
         loadingPlaceholder.replaceWith(mediaElement);
 
         const updatedTag = buildPersistedMediaTag(tag, generated, persistedSrc, persistedPosterSrc);
         replaceTagInMessageSource(message, tag, updatedTag);
+        succeeded = true;
 
         const readyMsg = isGeneratedVideoResult(generated) ? t`Video ready` : t`Image ready`;
         toastr.success(readyMsg, t`Image Generation`, { timeOut: 2000 });
     } catch (error) {
         clearLoadingPlaceholderTimer(loadingPlaceholder);
+        if (loadingPlaceholder?.isConnected && existingMedia) loadingPlaceholder.replaceWith(existingMedia);
         const cancelled = isGenerationCancelled(error, getLoadingSignal(loadingPlaceholder));
         iigLog(cancelled ? 'INFO' : 'ERROR', `Single-tag regeneration ${cancelled ? 'cancelled' : 'failed'} for tag ${tagIndex}:`, error);
         if (cancelled) toastr.info(t`Generation was cancelled by the user.`, t`Generation cancelled`, { timeOut: 2500 });
@@ -859,9 +883,8 @@ export async function regenerateSingleTag(messageId, tagIndex) {
             toastr.error(friendly.message, friendly.title);
         }
     } finally {
-        processingMessages.delete(messageId);
-        await context.saveChat();
-        rerenderMessageHtml(context, message, settings, messageId, mesTextEl);
+        activeSingleTagTasks.delete(taskKey);
+        if (succeeded) await queueChatSave(context);
     }
 }
 
@@ -911,6 +934,12 @@ export async function regenerateMessageImages(messageId) {
         for (let index = 0; index < tags.length; index++) {
             const tag = tags[index];
             const tagId = `iig-regen-${messageId}-${index}`;
+            const taskKey = singleTagTaskKey(messageId, index);
+            if (activeSingleTagTasks.has(taskKey)) {
+                iigLog('INFO', `Skipping tag ${index}: it is already being generated`);
+                continue;
+            }
+            activeSingleTagTasks.add(taskKey);
             applyConfiguredStyleToTag(tag, settings);
 
             try {
@@ -918,7 +947,10 @@ export async function regenerateMessageImages(messageId) {
                 const existingMediaList = Array.from(
                     mesTextEl.querySelectorAll('img[data-iig-instruction], video[data-iig-instruction]')
                 );
-                const existingMedia = existingMediaList[index] || existingMediaList[0] || null;
+                const existingMedia = existingMediaList.find((media) => Number.parseInt(media.dataset.iigTagIndex || '', 10) === index)
+                    || existingMediaList[index]
+                    || existingMediaList[0]
+                    || null;
                 if (existingMedia) {
                     // Preserve the instruction for future regenerations
                     const instruction = existingMedia.getAttribute('data-iig-instruction');
@@ -953,6 +985,7 @@ export async function regenerateMessageImages(messageId) {
                     if (instruction) {
                         mediaElement.setAttribute('data-iig-instruction', instruction);
                     }
+                    mediaElement.dataset.iigTagIndex = String(index);
                     loadingPlaceholder.replaceWith(mediaElement);
 
                     const updatedTag = buildPersistedMediaTag(tag, generated, persistedSrc, persistedPosterSrc);
@@ -975,11 +1008,13 @@ export async function regenerateMessageImages(messageId) {
                     const friendly = formatProviderError(error);
                     toastr.error(friendly.message, friendly.title);
                 }
+            } finally {
+                activeSingleTagTasks.delete(taskKey);
             }
         }
     } finally {
         processingMessages.delete(messageId);
-        await context.saveChat();
+        await queueChatSave(context);
         rerenderMessageHtml(context, message, settings, messageId, mesTextEl);
         iigLog('INFO', `Regeneration complete for message ${messageId}`);
     }

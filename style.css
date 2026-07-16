@@ -3587,6 +3587,14 @@
     display: none;
 }
 
+.iig-gallery-close {
+    position: relative;
+    z-index: 10;
+    pointer-events: auto !important;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
 .iig-gallery-body {
     flex: 1;
     overflow-y: auto;
@@ -3829,7 +3837,7 @@
     user-select: none;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 600px), (pointer: coarse) and (max-width: 1024px) {
     .iig-gallery-overlay {
         padding: 0;
         display: flex;
@@ -3849,7 +3857,10 @@
     .iig-gallery-header {
         flex-wrap: wrap;
         gap: 6px;
-        padding: 10px;
+        padding-top: max(10px, env(safe-area-inset-top, 0px));
+        padding-right: max(10px, env(safe-area-inset-right, 0px));
+        padding-bottom: 10px;
+        padding-left: max(10px, env(safe-area-inset-left, 0px));
     }
 
     .iig-gallery-title {
@@ -3862,9 +3873,12 @@
     }
 
     .iig-gallery-close {
-        min-width: 40px;
-        min-height: 40px;
-        font-size: 18px;
+        width: 44px;
+        height: 44px;
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0;
+        font-size: 22px;
         justify-content: center;
         flex-shrink: 0;
     }
@@ -3911,7 +3925,10 @@
     }
 
     .iig-gallery-body {
-        padding: 8px;
+        padding-top: 8px;
+        padding-right: max(8px, env(safe-area-inset-right, 0px));
+        padding-bottom: 8px;
+        padding-left: max(8px, env(safe-area-inset-left, 0px));
         -webkit-overflow-scrolling: touch;
     }
 
@@ -3923,7 +3940,9 @@
         flex-direction: column;
         gap: 6px;
         padding: 6px 12px;
+        padding-right: max(12px, env(safe-area-inset-right, 0px));
         padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+        padding-left: max(12px, env(safe-area-inset-left, 0px));
     }
 
     .iig-gallery-thumb-slider {

@@ -55,6 +55,22 @@ function scanAndAttach(root) {
 function attachActions(img) {
     if (!img.src || img.src.endsWith('[IMG:GEN]')) return;
 
+    const messageEl = findMessageElement(img);
+    const messageId = messageEl?.getAttribute('mesid');
+    if (messageId !== null && messageId !== undefined && messageId !== '') {
+        img.dataset.iigMessageId = messageId;
+    }
+
+    // Keep a stable source-tag index. When another image in the same message
+    // is replaced by a loading placeholder, live DOM indexes shift.
+    if (!img.dataset.iigTagIndex) {
+        const media = messageEl
+            ? Array.from(messageEl.querySelectorAll('img[data-iig-instruction], video[data-iig-instruction]'))
+            : [];
+        const stableIndex = media.indexOf(img);
+        if (stableIndex >= 0) img.dataset.iigTagIndex = String(stableIndex);
+    }
+
     const isError = img.classList.contains('iig-error-image');
     let host = img.parentElement;
 
@@ -71,6 +87,20 @@ function attachActions(img) {
     img.replaceWith(host);
     host.appendChild(img);
     host.appendChild(buildActions(img, isError));
+}
+
+function findMessageElement(element) {
+    if (!element) return null;
+    const direct = element.closest?.('.mes[mesid], [mesid]');
+    if (direct) return direct;
+
+    const hostDirect = element.parentElement?.closest?.('.mes[mesid], [mesid]');
+    if (hostDirect) return hostDirect;
+
+    for (const candidate of document.querySelectorAll('#chat [mesid]')) {
+        if (candidate.contains(element)) return candidate;
+    }
+    return null;
 }
 
 function buildActions(img, isError) {
@@ -110,18 +140,22 @@ async function downloadImage(img) {
 }
 
 async function regenerateOne(img) {
-    const messageEl = img.closest('.mes');
-    if (!messageEl) {
+    const messageEl = findMessageElement(img);
+    const storedMessageId = Number.parseInt(img.dataset.iigMessageId || '', 10);
+    const domMessageId = Number.parseInt(messageEl?.getAttribute('mesid') || '', 10);
+    const messageId = Number.isInteger(storedMessageId) ? storedMessageId : domMessageId;
+    if (!Number.isInteger(messageId)) {
         toastr.error(t`Could not locate message`, t`Image Generation`);
         return;
     }
-    const messageId = parseInt(messageEl.getAttribute('mesid') || '', 10);
-    if (Number.isNaN(messageId)) return;
 
     // tagIndex must match regenerateSingleTag's selector (img + video) so we
     // don't regenerate the wrong tag when a Naistera video precedes the image.
-    const allMedia = Array.from(messageEl.querySelectorAll('img[data-iig-instruction], video[data-iig-instruction]'));
-    const tagIndex = allMedia.indexOf(img);
+    const storedIndex = Number.parseInt(img.dataset.iigTagIndex || '', 10);
+    const allMedia = messageEl
+        ? Array.from(messageEl.querySelectorAll('img[data-iig-instruction], video[data-iig-instruction]'))
+        : [];
+    const tagIndex = Number.isInteger(storedIndex) && storedIndex >= 0 ? storedIndex : allMedia.indexOf(img);
     if (tagIndex < 0) return;
 
     await regenerateSingleTag(messageId, tagIndex);

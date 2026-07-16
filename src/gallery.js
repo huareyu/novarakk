@@ -273,9 +273,21 @@ export function openGallery() {
     const bodyEl = overlay.querySelector('#iig_gallery_body');
 
     // Close
-    const close = () => { resetState(); overlay.remove(); };
-    overlay.querySelector('#iig_gallery_close').addEventListener('click', close);
-    overlay.querySelector('#iig_gallery_close_mobile').addEventListener('click', close);
+    const close = () => {
+        if (!overlay.isConnected) return;
+        resetState();
+        overlay.remove();
+    };
+    const closeFromControl = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+    };
+    for (const closeButton of overlay.querySelectorAll('.iig-gallery-close')) {
+        closeButton.addEventListener('click', closeFromControl);
+        closeButton.addEventListener('pointerup', closeFromControl);
+        closeButton.addEventListener('touchend', closeFromControl, { passive: false });
+    }
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
     document.addEventListener('keydown', function escHandler(e) {
         if (e.key === 'Escape' && document.getElementById(GALLERY_OVERLAY_ID)) {

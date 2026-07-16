@@ -294,5 +294,6 @@
     "Generation cancelled by user": "Генерацію перервано користувачем",
     "Generation cancelled": "Генерацію перервано",
     "Generation was cancelled by the user.": "Генерацію було перервано користувачем.",
-    "Stop generation": "Перервати"
+    "Stop generation": "Перервати",
+    "This image is already being processed": "Це зображення вже генерується"
 }

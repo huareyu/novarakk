@@ -116,17 +116,23 @@ function buildActions(img, isError) {
     actions.addEventListener('pointerdown', (e) => e.stopPropagation());
     actions.addEventListener('click', (e) => e.stopPropagation());
 
+    // SillyTavern may replace only the <img> when switching a swipe while
+    // preserving our host and action buttons. Resolve the live image at click
+    // time instead of retaining a reference to the detached previous swipe.
+    const getCurrentImage = () => actions.parentElement
+        ?.querySelector(':scope > img[data-iig-instruction]') || img;
+
     actions.querySelector('.iig-img-download')?.addEventListener('click', async (e) => {
         stopAll(e);
-        await downloadImage(img);
+        await downloadImage(getCurrentImage());
     });
     actions.querySelector('.iig-img-regen')?.addEventListener('click', async (e) => {
         stopAll(e);
-        await regenerateOne(img);
+        await regenerateOne(getCurrentImage());
     });
     actions.querySelector('.iig-img-retry')?.addEventListener('click', async (e) => {
         stopAll(e);
-        await regenerateOne(img);
+        await regenerateOne(getCurrentImage());
     });
 
     return actions;

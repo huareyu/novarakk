@@ -68,6 +68,25 @@ function collectChatImages() {
     return results;
 }
 
+function findLiveChatImage(item) {
+    if (!item || item.messageId === null || item.messageId === undefined) return null;
+    const mesEl = document.querySelector(`#chat .mes[mesid="${item.messageId}"], #chat [mesid="${item.messageId}"]`);
+    if (!mesEl) return null;
+    const images = Array.from(mesEl.querySelectorAll('img[data-iig-instruction]'));
+    return images.find((image) => Number.parseInt(image.dataset.iigTagIndex || '', 10) === item.tagIndex)
+        || images[item.tagIndex]
+        || null;
+}
+
+function getLiveDownloadData(item) {
+    if (item?.messageId === null || item?.messageId === undefined) return item;
+    const liveImage = findLiveChatImage(item);
+    if (!liveImage?.src || liveImage.classList.contains('iig-error-image')) return null;
+    const src = liveImage.src;
+    const filename = src.includes('/') ? src.split('/').pop() : src;
+    return { ...item, src, filename: filename || item.filename };
+}
+
 // ── Collect all images of the current character (from disk) ──
 
 async function getCharacterFolder() {
@@ -275,6 +294,8 @@ export function openGallery() {
     // Close
     const close = () => {
         if (!overlay.isConnected) return;
+        overlay._chatObserver?.disconnect();
+        if (overlay._chatRefreshTimer) clearTimeout(overlay._chatRefreshTimer);
         resetState();
         overlay.remove();
     };
@@ -300,6 +321,43 @@ export function openGallery() {
     // Stop bubbling
     for (const ev of ['click', 'mousedown', 'pointerdown']) {
         modal.addEventListener(ev, (e) => e.stopPropagation());
+    }
+
+    // Keep the chat gallery in sync with completed rerolls. We intentionally
+    // ignore removal of the old image/loading-placeholder insertion and only
+    // refresh when a generated image is added or its src changes.
+    const chat = document.getElementById('chat');
+    if (chat) {
+        const scheduleChatRefresh = () => {
+            if (!overlay.isConnected || gs.scope !== 'chat') return;
+            if (overlay._chatRefreshTimer) clearTimeout(overlay._chatRefreshTimer);
+            overlay._chatRefreshTimer = setTimeout(() => {
+                overlay._chatRefreshTimer = null;
+                if (!overlay.isConnected || gs.scope !== 'chat') return;
+                gs.images = collectChatImages();
+                gs.selected.clear();
+                clampPage();
+                updateSelectionUI(overlay);
+                renderContent(bodyEl);
+            }, 120);
+        };
+        overlay._chatObserver = new MutationObserver((mutations) => {
+            const changed = mutations.some((mutation) => {
+                if (mutation.type === 'attributes') {
+                    return mutation.target instanceof HTMLImageElement
+                        && mutation.target.matches('img[data-iig-instruction]');
+                }
+                return Array.from(mutation.addedNodes).some((node) => node instanceof Element
+                    && (node.matches?.('img[data-iig-instruction]') || node.querySelector?.('img[data-iig-instruction]')));
+            });
+            if (changed) scheduleChatRefresh();
+        });
+        overlay._chatObserver.observe(chat, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['src'],
+        });
     }
 
     // Scope toggle (chat / all character images)
@@ -687,7 +745,12 @@ function openGalleryLightbox(idx) {
 // ── Download ──
 
 async function downloadGalleryImage(img) {
-    await downloadImageSrc(img.src, img.filename || null);
+    const current = getLiveDownloadData(img);
+    if (!current) {
+        toastr.info(t`Image is still being regenerated`, t`Gallery`, { timeOut: 2500 });
+        return;
+    }
+    await downloadImageSrc(current.src, current.filename || null);
 }
 
 // ── Delete image from chat message ──

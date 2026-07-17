@@ -34,6 +34,7 @@ import {
     getInstructionAttributeValue,
     getMatchedAdditionalReferences,
     isGeneratedVideoResult,
+    parseInstructionObject,
     parseMessageImageTags,
     replaceTagInMessageSource,
     rerenderMessageHtml,
@@ -772,7 +773,37 @@ export async function processMessageTags(messageId) {
 
 // ----- Regenerate single tag (used by image action buttons) -----
 
-export async function regenerateSingleTag(messageId, tagIndex) {
+function findTagIndexByInstruction(tags, instructionValue) {
+    if (!instructionValue) return -1;
+
+    try {
+        const wanted = parseInstructionObject(instructionValue);
+        const fields = [
+            ['prompt', 'prompt'],
+            ['style', 'style'],
+            ['aspectRatio', 'aspect_ratio'],
+            ['imageSize', 'image_size'],
+            ['quality', 'quality'],
+            ['preset', 'preset'],
+        ];
+
+        return tags.findIndex((tag) => {
+            let compared = 0;
+            for (const [tagKey, instructionKey] of fields) {
+                const expected = wanted?.[instructionKey];
+                if (expected === undefined || expected === null || expected === '') continue;
+                compared++;
+                if (String(tag?.[tagKey] ?? '') !== String(expected)) return false;
+            }
+            return compared > 0;
+        });
+    } catch (error) {
+        iigLog('WARN', 'Could not parse clicked media instruction while locating its source tag:', error);
+        return -1;
+    }
+}
+
+export async function regenerateSingleTag(messageId, tagIndex, instructionValue = '') {
     const context = SillyTavern.getContext();
     const settings = getSettings();
     const message = context.chat[messageId];
@@ -783,13 +814,16 @@ export async function regenerateSingleTag(messageId, tagIndex) {
     }
 
     const tags = await parseMessageImageTags(message, { forceAll: true });
+    const domTagIndex = tagIndex;
+    const matchedTagIndex = findTagIndexByInstruction(tags, instructionValue);
+    const sourceTagIndex = matchedTagIndex >= 0 ? matchedTagIndex : domTagIndex;
 
-    if (tagIndex < 0 || tagIndex >= tags.length) {
+    if (sourceTagIndex < 0 || sourceTagIndex >= tags.length) {
         toastr.warning(t`Tag not found`, t`Image Generation`);
         return;
     }
 
-    const taskKey = singleTagTaskKey(messageId, tagIndex);
+    const taskKey = singleTagTaskKey(messageId, domTagIndex);
     if (activeSingleTagTasks.has(taskKey)) {
         toastr.info(t`This image is already being processed`, t`Image Generation`);
         return;
@@ -810,8 +844,8 @@ export async function regenerateSingleTag(messageId, tagIndex) {
         rerenderMessageHtml(context, message, settings, messageId, mesTextEl);
     }
 
-    const tag = tags[tagIndex];
-    const tagId = `iig-regen-${messageId}-${tagIndex}`;
+    const tag = tags[sourceTagIndex];
+    const tagId = `iig-regen-${messageId}-${domTagIndex}`;
     applyConfiguredStyleToTag(tag, settings);
     let loadingPlaceholder = null;
     let existingMedia = null;
@@ -821,12 +855,15 @@ export async function regenerateSingleTag(messageId, tagIndex) {
         const existingMediaList = Array.from(
             mesTextEl.querySelectorAll('img[data-iig-instruction], video[data-iig-instruction]')
         );
-        existingMedia = existingMediaList.find((media) => Number.parseInt(media.dataset.iigTagIndex || '', 10) === tagIndex)
-            || existingMediaList[tagIndex]
+        existingMedia = existingMediaList.find((media) => instructionValue
+            && decodeHtmlEntities(media.getAttribute('data-iig-instruction') || '') === decodeHtmlEntities(instructionValue))
+            || existingMediaList.find((media) => Number.parseInt(media.dataset.iigTagIndex || '', 10) === domTagIndex)
+            || existingMediaList[domTagIndex]
+            || existingMediaList[sourceTagIndex]
             || null;
 
         if (!existingMedia) {
-            throw new Error(`Media element at index ${tagIndex} not found in DOM`);
+            throw new Error(`Media element at index ${domTagIndex} not found in DOM`);
         }
 
         const instruction = existingMedia.getAttribute('data-iig-instruction');
@@ -849,7 +886,7 @@ export async function regenerateSingleTag(messageId, tagIndex) {
         const { persistedSrc, persistedPosterSrc } = await persistGeneratedMedia(
             generated,
             statusEl,
-            { messageId, tagIndex, mode: 'regenerate' }
+            { messageId, tagIndex: sourceTagIndex, mode: 'regenerate' }
         );
 
         const mediaElement = createGeneratedMediaElement(
@@ -862,7 +899,7 @@ export async function regenerateSingleTag(messageId, tagIndex) {
         if (instruction) {
             mediaElement.setAttribute('data-iig-instruction', instruction);
         }
-        mediaElement.dataset.iigTagIndex = String(tagIndex);
+        mediaElement.dataset.iigTagIndex = String(domTagIndex);
 
         loadingPlaceholder.replaceWith(mediaElement);
 
@@ -876,7 +913,7 @@ export async function regenerateSingleTag(messageId, tagIndex) {
         clearLoadingPlaceholderTimer(loadingPlaceholder);
         if (loadingPlaceholder?.isConnected && existingMedia) loadingPlaceholder.replaceWith(existingMedia);
         const cancelled = isGenerationCancelled(error, getLoadingSignal(loadingPlaceholder));
-        iigLog(cancelled ? 'INFO' : 'ERROR', `Single-tag regeneration ${cancelled ? 'cancelled' : 'failed'} for tag ${tagIndex}:`, error);
+        iigLog(cancelled ? 'INFO' : 'ERROR', `Single-tag regeneration ${cancelled ? 'cancelled' : 'failed'} for tag ${sourceTagIndex}:`, error);
         if (cancelled) toastr.info(t`Generation was cancelled by the user.`, t`Generation cancelled`, { timeOut: 2500 });
         else {
             const friendly = formatProviderError(error);

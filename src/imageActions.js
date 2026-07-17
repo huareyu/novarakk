@@ -158,5 +158,6 @@ async function regenerateOne(img) {
     const tagIndex = Number.isInteger(storedIndex) && storedIndex >= 0 ? storedIndex : allMedia.indexOf(img);
     if (tagIndex < 0) return;
 
-    await regenerateSingleTag(messageId, tagIndex);
+    const instruction = img.getAttribute('data-iig-instruction') || '';
+    await regenerateSingleTag(messageId, tagIndex, instruction);
 }

@@ -42,8 +42,14 @@ export function getMessageRenderText(message, settings = getSettings()) {
 
 export async function parseMessageImageTags(message, options = {}) {
     const settings = getSettings();
-    const tags = [];
+    if (settings.externalBlocks && message?.extra?.display_text) {
+        const displayTags = await parseImageTags(message.extra.display_text, options);
+        if (displayTags.length > 0) {
+            return displayTags.map(tag => ({ ...tag, sourceKey: 'display_text' }));
+        }
+    }
 
+    const tags = [];
     const mainTags = await parseImageTags(message?.mes || '', options);
     tags.push(...mainTags.map(tag => ({ ...tag, sourceKey: 'mes' })));
 
@@ -57,6 +63,26 @@ export async function parseMessageImageTags(message, options = {}) {
 
 export function replaceTagInMessageSource(message, tag, replacement) {
     if (!message || !tag) return;
+
+    if (tag.sourceKey === 'display_text') {
+        if (!message.extra) message.extra = {};
+        message.extra.display_text = (message.extra.display_text || '').replace(tag.fullMatch, replacement);
+
+        // Keep storage mirrors in sync when they contain the same raw tag.
+        if (message.mes) message.mes = message.mes.replace(tag.fullMatch, replacement);
+        if (message.extra.extblocks) message.extra.extblocks = message.extra.extblocks.replace(tag.fullMatch, replacement);
+
+        const swipeId = message.swipe_id;
+        if (swipeId !== undefined) {
+            if (Array.isArray(message.swipes) && typeof message.swipes[swipeId] === 'string') {
+                message.swipes[swipeId] = message.swipes[swipeId].replace(tag.fullMatch, replacement);
+            }
+            const swipeExtra = message.swipe_info?.[swipeId]?.extra;
+            if (swipeExtra?.display_text) swipeExtra.display_text = swipeExtra.display_text.replace(tag.fullMatch, replacement);
+            if (swipeExtra?.extblocks) swipeExtra.extblocks = swipeExtra.extblocks.replace(tag.fullMatch, replacement);
+        }
+        return;
+    }
 
     if (tag.sourceKey === 'extblocks') {
         if (!message.extra) message.extra = {};

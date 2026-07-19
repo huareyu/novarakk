@@ -26,9 +26,9 @@ let openWithDataFn = null;
  * @param {string} [prompt] - Промпт (если известен)
  * @param {string} [style] - Стиль (если известен)
  */
-export function openLightboxWithSrc(src, prompt = '', style = '') {
+export function openLightboxWithSrc(src, prompt = '', style = '', navigation = null) {
     if (!src) return;
-    openWithDataFn?.({ src, prompt, style });
+    openWithDataFn?.({ src, prompt, style, navigation });
 }
 
 let state = {
@@ -46,6 +46,8 @@ let state = {
     prompt: '',
     style: '',
     imgSrc: '',
+    onPrevious: null,
+    onNext: null,
 };
 
 function resetState() {
@@ -57,6 +59,8 @@ function resetState() {
     state.prompt = '';
     state.style = '';
     state.imgSrc = '';
+    state.onPrevious = null;
+    state.onNext = null;
 }
 
 function applyTransform(imgEl) {
@@ -76,6 +80,12 @@ export function initLightbox() {
     overlay.setAttribute('aria-hidden', 'true');
     overlay.innerHTML = `
         <div class="iig-lightbox-backdrop"></div>
+        <button class="iig-lightbox-nav iig-lightbox-nav-prev" type="button" title="${t`Previous image`}" aria-label="${t`Previous image`}">
+            <i class="fa-solid fa-chevron-left"></i>
+        </button>
+        <button class="iig-lightbox-nav iig-lightbox-nav-next" type="button" title="${t`Next image`}" aria-label="${t`Next image`}">
+            <i class="fa-solid fa-chevron-right"></i>
+        </button>
         <div class="iig-lightbox-toolbar">
             <button class="iig-lightbox-btn iig-lightbox-zoom-in" type="button" title="${t`Zoom in`}" aria-label="${t`Zoom in`}">
                 <i class="fa-solid fa-magnifying-glass-plus"></i>
@@ -116,6 +126,13 @@ export function initLightbox() {
     const promptTextEl = /** @type {HTMLElement} */ (overlay.querySelector('.iig-lightbox-prompt-text'));
     const promptStyleEl = /** @type {HTMLElement} */ (overlay.querySelector('.iig-lightbox-prompt-style'));
     const contentEl = /** @type {HTMLElement} */ (overlay.querySelector('.iig-lightbox-content'));
+    const previousButton = /** @type {HTMLButtonElement} */ (overlay.querySelector('.iig-lightbox-nav-prev'));
+    const nextButton = /** @type {HTMLButtonElement} */ (overlay.querySelector('.iig-lightbox-nav-next'));
+
+    function updateNavigation() {
+        previousButton.hidden = typeof state.onPrevious !== 'function';
+        nextButton.hidden = typeof state.onNext !== 'function';
+    }
 
     function updateZoomLevel() {
         zoomLevelEl.textContent = `${Math.round(state.scale * 100)}%`;
@@ -157,12 +174,25 @@ export function initLightbox() {
         imgEl.src = '';
         imgEl.style.transform = '';
         resetState();
+        updateNavigation();
         updateZoomLevel();
     };
 
     // --- Close ---
     overlay.querySelector('.iig-lightbox-backdrop')?.addEventListener('click', close);
     overlay.querySelector('.iig-lightbox-close')?.addEventListener('click', close);
+
+    // --- Gallery navigation ---
+    previousButton.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        state.onPrevious?.();
+    });
+    nextButton.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        state.onNext?.();
+    });
 
     // --- Zoom buttons ---
     overlay.querySelector('.iig-lightbox-zoom-in')?.addEventListener('click', (e) => {
@@ -321,17 +351,26 @@ export function initLightbox() {
 
     // --- Esc ---
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && overlay.classList.contains('open')) {
+        if (!overlay.classList.contains('open')) return;
+        if (e.key === 'Escape') {
             close(e);
+        } else if (e.key === 'ArrowLeft' && state.onPrevious) {
+            e.preventDefault();
+            state.onPrevious();
+        } else if (e.key === 'ArrowRight' && state.onNext) {
+            e.preventDefault();
+            state.onNext();
         }
     });
 
     // --- Open with arbitrary data (chat click + gallery) ---
-    function openWithData({ src, alt = '', prompt = '', style = '' }) {
+    function openWithData({ src, alt = '', prompt = '', style = '', navigation = null }) {
         resetState();
         state.imgSrc = src;
         state.prompt = prompt;
         state.style = style;
+        state.onPrevious = navigation?.onPrevious || null;
+        state.onNext = navigation?.onNext || null;
 
         imgEl.src = src;
         imgEl.alt = alt;
@@ -350,6 +389,7 @@ export function initLightbox() {
         promptPanel.setAttribute('aria-hidden', 'true');
 
         updateZoomLevel();
+        updateNavigation();
 
         overlay.classList.add('open');
         overlay.setAttribute('aria-hidden', 'false');

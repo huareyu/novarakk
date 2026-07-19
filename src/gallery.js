@@ -715,27 +715,30 @@ function restoreOverlayWhenLightboxCloses(overlay) {
     }
 }
 
-function openGalleryLightbox(idx) {
+function showGalleryLightboxImage(idx) {
     const sorted = getSorted();
     const img = sorted[idx];
-    if (!img) return;
+    if (!img) return false;
+
+    const current = getLiveDownloadData(img);
+    if (!current) return false;
+
+    openLightboxWithSrc(current.src, current.prompt, current.style, {
+        onPrevious: idx > 0 ? () => showGalleryLightboxImage(idx - 1) : null,
+        onNext: idx < sorted.length - 1 ? () => showGalleryLightboxImage(idx + 1) : null,
+    });
+    return true;
+}
+
+function openGalleryLightbox(idx) {
+    const sorted = getSorted();
+    if (!sorted[idx]) return;
 
     const overlay = document.getElementById(GALLERY_OVERLAY_ID);
     if (overlay) overlay.style.display = 'none';
 
     // Disk files (character scope) aren't tied to a chat message — open directly
-    if (img.messageId === null) {
-        openLightboxWithSrc(img.src, img.prompt, img.style);
-        restoreOverlayWhenLightboxCloses(overlay);
-        return;
-    }
-
-    const mesEl = document.querySelector(`#chat .mes[mesid="${img.messageId}"]`);
-    if (!mesEl) { if (overlay) overlay.style.display = ''; return; }
-    const imgs = mesEl.querySelectorAll('img[data-iig-instruction]');
-    const target = imgs[img.tagIndex];
-    if (target && !target.classList.contains('iig-error-image')) {
-        target.click();
+    if (showGalleryLightboxImage(idx)) {
         restoreOverlayWhenLightboxCloses(overlay);
     } else {
         if (overlay) overlay.style.display = '';

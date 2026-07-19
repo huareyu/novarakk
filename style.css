@@ -1737,6 +1737,47 @@
     cursor: zoom-out;
 }
 
+.iig-lightbox-nav {
+    position: absolute;
+    top: 50%;
+    z-index: 5;
+    width: 54px;
+    height: 78px;
+    min-height: 0;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 16px;
+    background: rgba(0, 0, 0, 0.48);
+    color: #fff;
+    font-size: 1.55rem;
+    cursor: pointer;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.iig-lightbox-nav:hover {
+    background: rgba(255, 255, 255, 0.18);
+    transform: translateY(-50%) scale(1.04);
+}
+
+.iig-lightbox-nav[hidden] {
+    display: none;
+}
+
+.iig-lightbox-nav-prev {
+    left: max(12px, env(safe-area-inset-left));
+}
+
+.iig-lightbox-nav-next {
+    right: max(12px, env(safe-area-inset-right));
+}
+
 /* --- Toolbar --- */
 
 .iig-lightbox-toolbar {
@@ -2508,6 +2549,21 @@
 }
 
 @media (max-width: 600px) {
+    .iig-lightbox-nav {
+        width: 42px;
+        height: 64px;
+        border-radius: 13px;
+        font-size: 1.15rem;
+    }
+
+    .iig-lightbox-nav-prev {
+        left: max(5px, env(safe-area-inset-left));
+    }
+
+    .iig-lightbox-nav-next {
+        right: max(5px, env(safe-area-inset-right));
+    }
+
     .iig-wardrobe-button-placement {
         align-items: stretch;
         flex-direction: column;

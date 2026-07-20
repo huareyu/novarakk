@@ -26,6 +26,7 @@ import {
     getActiveOutfitData,
     isActiveOutfitTryOn,
 } from './wardrobe.js';
+import { findFirstMatchKeyword } from './matching.js';
 
 // ----- ID generators -----
 
@@ -132,27 +133,24 @@ export function toggleNpc(npcId) {
 export function detectMentionedEntities(prompt) {
     const context = SillyTavern.getContext();
     const settings = getSettings();
-    const lowered = String(prompt || '').toLowerCase();
 
     const result = { charMentioned: false, userMentioned: false, npcIds: [] };
 
     const charName = context.characters?.[context.characterId]?.name;
-    if (charName && lowered.includes(String(charName).toLowerCase())) {
+    if (charName && findFirstMatchKeyword(prompt, [charName])) {
         result.charMentioned = true;
     }
     const userName = context.name1;
-    if (userName && lowered.includes(String(userName).toLowerCase())) {
+    if (userName && findFirstMatchKeyword(prompt, [userName])) {
         result.userMentioned = true;
     }
 
     for (const npc of ensureNpcList(settings)) {
         if (!npc.name || npc.enabled === false) continue;
         const names = [npc.name, ...(Array.isArray(npc.aliases) ? npc.aliases : [])].filter(Boolean);
-        for (const name of names) {
-            if (lowered.includes(String(name).toLowerCase())) {
-                result.npcIds.push(npc.id);
-                break;
-            }
+        if (findFirstMatchKeyword(prompt, names)) {
+            // One NPC/reference is included once even if several aliases occur.
+            result.npcIds.push(npc.id);
         }
     }
 

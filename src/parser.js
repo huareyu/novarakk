@@ -23,12 +23,17 @@ import {
 import {
     checkFileExists,
     decodeHtmlEntities,
-    escapeRegex,
     normalizeStoredImagePath,
     sanitizeForHtml,
     sanitizeForSingleQuotedAttribute,
 } from './utils.js';
 import { buildExtraPromptBlocks } from './extras.js';
+import {
+    findFirstMatchKeyword,
+    normalizeMatchText,
+    splitMatchKeywords,
+    textContainsMatchKeyword,
+} from './matching.js';
 
 // ----- Shared message-text helpers -----
 
@@ -150,35 +155,15 @@ export function extractGeneratedImageUrlsFromText(text) {
 // ----- Trigger-name matching (используется в references.js) -----
 
 export function normalizeReferenceTriggerText(text) {
-    return String(text || '')
-        .normalize('NFKC')
-        .toLowerCase()
-        .replace(/\s+/g, ' ')
-        .trim();
+    return normalizeMatchText(text);
 }
 
 export function promptContainsReferenceName(prompt, name) {
-    const normalizedPrompt = normalizeReferenceTriggerText(prompt);
-    const normalizedName = normalizeReferenceTriggerText(name);
-
-    if (!normalizedPrompt || !normalizedName) {
-        return false;
-    }
-
-    const pattern = escapeRegex(normalizedName).replace(/\s+/g, '\\s+');
-    try {
-        const regex = new RegExp(`(^|[^\\p{L}\\p{N}_])${pattern}(?=$|[^\\p{L}\\p{N}_])`, 'iu');
-        return regex.test(normalizedPrompt);
-    } catch (_error) {
-        return normalizedPrompt.includes(normalizedName);
-    }
+    return textContainsMatchKeyword(prompt, name);
 }
 
 export function parseReferenceAliases(name) {
-    return String(name || '')
-        .split(',')
-        .map((alias) => normalizeReferenceTriggerText(alias))
-        .filter(Boolean);
+    return splitMatchKeywords(name);
 }
 
 /**
@@ -190,9 +175,12 @@ export function parseReferenceAliases(name) {
  * не парсится — fallback на literal-match.
  */
 export function findPrimaryKeyMatch(prompt, name, useRegex) {
-    if (!useRegex) {
-        const aliases = parseReferenceAliases(name);
-        const hit = aliases.find((alias) => promptContainsReferenceName(prompt, alias));
+    const aliases = parseReferenceAliases(name);
+
+    // A comma-separated trigger is always an OR alias list. This remains
+    // literal even if Regex was accidentally left enabled for the entry.
+    if (!useRegex || aliases.length > 1) {
+        const hit = findFirstMatchKeyword(prompt, aliases);
         return hit ? { kind: 'primary', detail: hit } : null;
     }
 

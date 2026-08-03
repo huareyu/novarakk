@@ -70,6 +70,7 @@ function buildUpdateVisibility(settings) {
         const isVoid = apiType === 'void';
         const isAIGate = apiType === 'aigate';
         const isNovelAI = apiType === 'novelai';
+        const isProblembo = apiType === 'problembo';
 
         // Поддерживает ли активный провайдер референсы (учитывая модель).
         const provider = resolveActiveProvider(settings);
@@ -80,7 +81,7 @@ function buildUpdateVisibility(settings) {
         // показывается не только для Gemini, но и для любого OpenAI-семейства,
         // которое поддерживает /edits, и для OpenRouter/Electron Hub. Naistera
         // использует свой отдельный блок.
-        const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid || isAIGate) && refsSupported;
+        const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid || isAIGate || isProblembo) && refsSupported;
 
         // Model is used for OpenAI and Gemini; Naistera and NovelAI have their own selectors.
         document.getElementById('iig_model_row')?.classList.toggle('iig-hidden', isNaistera || isNovelAI);
@@ -100,6 +101,7 @@ function buildUpdateVisibility(settings) {
 
         // ElectronHub-only section
         document.getElementById('iig_electronhub_section')?.classList.toggle('iig-hidden', !isElectronHub);
+        document.getElementById('iig_problembo_section')?.classList.toggle('iig-hidden', !isProblembo);
 
         // NovelAI-only section; also hide endpoint/key/raw — NovelAI uses ST proxy.
         document.getElementById('iig_novelai_section')?.classList.toggle('iig-hidden', !isNovelAI);
@@ -147,6 +149,7 @@ function buildUpdateVisibility(settings) {
                 else if (isElectronHub) titleEl.textContent = 'Electron Hub';
                 else if (isVoid) titleEl.textContent = 'VoidAI / RouteMyAI';
                 else if (isAIGate) titleEl.textContent = 'AIGate';
+                else if (isProblembo) titleEl.textContent = 'Problembo';
                 else if (isOpenAI) titleEl.textContent = 'OpenAI / GPT Image';
                 else titleEl.textContent = 'Gemini / nano-banana';
             }
@@ -224,6 +227,11 @@ export function createSettingsUI() {
         return;
     }
 
+    // The reference modal must live directly under <body>. On mobile Safari,
+    // a fixed element inside SillyTavern's transformed settings drawer is
+    // positioned relative to that drawer and can end up above the viewport.
+    document.getElementById('iig_ref_import_modal')?.remove();
+
     const html = `
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
@@ -249,6 +257,11 @@ export function createSettingsUI() {
     `;
 
     container.insertAdjacentHTML('beforeend', html);
+
+    const referenceModal = document.getElementById('iig_ref_import_modal');
+    if (referenceModal && referenceModal.parentElement !== document.body) {
+        document.body.appendChild(referenceModal);
+    }
 
     bindSettingsEvents();
     bindExtrasEvents(settings);

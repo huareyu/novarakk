@@ -14,6 +14,7 @@ import {
 import {
     getCharacterAvatarBase64,
     getUserAvatarBase64,
+    loadPersonasModule,
 } from './references.js';
 import {
     imageUrlToDataUrl,
@@ -59,7 +60,9 @@ const SW_TYPE_ICONS = [
 
 const swDefaults = Object.freeze({
     wardrobes: {}, activeOutfits: {},
+    personaWardrobes: {}, personaActiveOutfits: {}, personaMigrationByCharacter: {},
     sharedUserWardrobe: [], sharedUserActive: null, sharedUserActiveByChat: {}, useSharedUserWardrobe: false,
+    sharedUserActiveByPersona: {},
     sharedBotWardrobe:  [], sharedBotActive:  null, sharedBotActiveByChat:  {}, useSharedBotWardrobe:  false,
     maxDimension: 512, showFloatingBtn: false,
     tryOnPrompt: '',
@@ -76,7 +79,11 @@ export function swGetSettings() {
     for (const k of Object.keys(swDefaults)) if (!Object.hasOwn(s, k)) s[k] = structuredClone(swDefaults[k]);
     if (!Array.isArray(s.sharedUserWardrobe)) s.sharedUserWardrobe = [];
     if (!Array.isArray(s.sharedBotWardrobe)) s.sharedBotWardrobe = [];
+    if (!s.personaWardrobes || typeof s.personaWardrobes !== 'object') s.personaWardrobes = {};
+    if (!s.personaActiveOutfits || typeof s.personaActiveOutfits !== 'object') s.personaActiveOutfits = {};
+    if (!s.personaMigrationByCharacter || typeof s.personaMigrationByCharacter !== 'object') s.personaMigrationByCharacter = {};
     if (!s.sharedUserActiveByChat || typeof s.sharedUserActiveByChat !== 'object') s.sharedUserActiveByChat = {};
+    if (!s.sharedUserActiveByPersona || typeof s.sharedUserActiveByPersona !== 'object') s.sharedUserActiveByPersona = {};
     if (!s.sharedBotActiveByChat || typeof s.sharedBotActiveByChat !== 'object') s.sharedBotActiveByChat = {};
     if (!Array.isArray(s.outfitTypes) || !s.outfitTypes.length) {
         s.outfitTypes = structuredClone(SW_DEFAULT_TYPES);
@@ -92,6 +99,7 @@ export function swGetSettings() {
 function swForEachOutfit(s, cb) {
     const arrays = [s.sharedBotWardrobe, s.sharedUserWardrobe];
     for (const w of Object.values(s.wardrobes || {})) if (w) arrays.push(w.bot, w.user);
+    for (const arr of Object.values(s.personaWardrobes || {})) arrays.push(arr);
     for (const arr of arrays) if (Array.isArray(arr)) for (const o of arr) if (o) cb(o);
 }
 
@@ -203,11 +211,80 @@ function swSortOutfits(arr, activeId) {
 }
 
 const swSharedCache = { bot: { b64: null, id: null }, user: { b64: null, id: null } };
+let swPersonasModule = null;
 function swSave() { SillyTavern.getContext().saveSettingsDebounced(); }
-
 function swCharName() {
     const ctx = SillyTavern.getContext();
     return (ctx.characterId !== undefined && ctx.characters?.[ctx.characterId]) ? (ctx.characters[ctx.characterId].name || '') : '';
+}
+
+function swPersonaAvatarId() {
+    const fromModule = String(swPersonasModule?.user_avatar || '').trim();
+    if (fromModule) return fromModule;
+    const ctx = SillyTavern.getContext();
+    const fromChat = String(ctx.chatMetadata?.persona || '').trim();
+    if (fromChat) return fromChat;
+    const matches = Object.entries(ctx.powerUserSettings?.personas || {})
+        .filter(([, name]) => String(name || '') === String(ctx.name1 || ''))
+        .map(([avatar]) => avatar);
+    if (matches.length === 1) return String(matches[0]);
+    return `name:${String(ctx.name1 || 'default').trim() || 'default'}`;
+}
+
+function swPersonaKey() { return `persona:${swPersonaAvatarId()}`; }
+function swPersonaLabel() {
+    const ctx = SillyTavern.getContext();
+    return String(ctx.powerUserSettings?.personas?.[swPersonaAvatarId()] || ctx.name1 || 'Persona');
+}
+
+function swEnsurePersonaWardrobe() {
+    const s = swGetSettings();
+    const key = swPersonaKey();
+    if (!Array.isArray(s.personaWardrobes[key])) s.personaWardrobes[key] = [];
+    if (!Object.hasOwn(s.personaActiveOutfits, key)) s.personaActiveOutfits[key] = null;
+
+    // Compatibility migration: the current character's legacy user wardrobe
+    // is claimed once by the persona that is active when it is first opened.
+    const cn = swCharName();
+    if (cn && !s.personaMigrationByCharacter[cn]) {
+        const legacy = swGetWardrobe(cn).user;
+        const target = s.personaWardrobes[key];
+        const known = new Set(target.map(item => item?.id).filter(Boolean));
+        for (const outfit of legacy) {
+            if (outfit?.id && !known.has(outfit.id)) {
+                target.push(structuredClone(outfit));
+                known.add(outfit.id);
+            }
+        }
+        const legacyActive = s.activeOutfits?.[cn]?.user || null;
+        if (!s.personaActiveOutfits[key] && legacyActive && known.has(legacyActive)) {
+            s.personaActiveOutfits[key] = legacyActive;
+        }
+        s.personaMigrationByCharacter[cn] = key;
+        swSave();
+    }
+    return { s, key, list: s.personaWardrobes[key] };
+}
+
+function swGetPersonalList(side) {
+    if (side === 'user') return swEnsurePersonaWardrobe().list;
+    return swGetWardrobe(swCharName()).bot;
+}
+function swGetPersonalActiveId(side) {
+    if (side === 'user') {
+        const { s, key } = swEnsurePersonaWardrobe();
+        return s.personaActiveOutfits[key] || null;
+    }
+    return swGetActive().bot || null;
+}
+function swSetPersonalActiveId(side, id) {
+    if (side === 'user') {
+        const { s, key } = swEnsurePersonaWardrobe();
+        s.personaActiveOutfits[key] = id || null;
+        swSave();
+        return true;
+    }
+    return swSetActive('bot', id);
 }
 
 function swGetWardrobe(cn) { const s = swGetSettings(); if (!s.wardrobes[cn]) s.wardrobes[cn] = { bot: [], user: [] }; return s.wardrobes[cn]; }
@@ -244,12 +321,32 @@ function swCurrentChatId() {
 }
 function swGetSharedActiveId(side) {
     const cfg = swSharedCfg(side);
+    if (side === 'user') {
+        const s = swGetSettings();
+        const key = swPersonaKey();
+        if (Object.hasOwn(s.sharedUserActiveByPersona, key)) return s.sharedUserActiveByPersona[key] || null;
+        const legacyChatId = swCurrentChatId();
+        if (legacyChatId && Object.hasOwn(cfg.byChat(), legacyChatId)) {
+            const legacyId = cfg.byChat()[legacyChatId] || null;
+            if (legacyId) s.sharedUserActiveByPersona[key] = legacyId;
+            swSave();
+            return legacyId;
+        }
+        return cfg.global();
+    }
     const cid = swCurrentChatId();
     if (cid) { const m = cfg.byChat(); return Object.hasOwn(m, cid) ? m[cid] : null; }
     return cfg.global();
 }
 function swSetSharedActiveId(side, id) {
     const cfg = swSharedCfg(side);
+    if (side === 'user') {
+        const map = swGetSettings().sharedUserActiveByPersona;
+        const key = swPersonaKey();
+        if (id == null) delete map[key]; else map[key] = id;
+        swSave();
+        return;
+    }
     const cid = swCurrentChatId();
     if (cid) { const m = cfg.byChat(); if (id == null) delete m[cid]; else m[cid] = id; }
     else cfg.setGlobal(id);
@@ -262,8 +359,8 @@ function swGetActiveSideOutfit(side) {
         const id = swGetSharedActiveId(side);
         return id ? (cfg.list().find(o => o.id === id) || null) : null;
     }
-    const cn = swCharName(); if (!cn) return null;
-    const a = swGetActive(); return a[side] ? swFind(cn, side, a[side]) : null;
+    const id = swGetPersonalActiveId(side);
+    return id ? (swGetPersonalList(side).find(o => o.id === id) || null) : null;
 }
 function swGetActiveBotOutfit()  { return swGetActiveSideOutfit('bot'); }
 function swGetActiveUserOutfit() { return swGetActiveSideOutfit('user'); }
@@ -282,19 +379,28 @@ function swCurrentView() {
                 cfg.setList(cfg.list().filter(o => o.id !== id));
                 if (cfg.global() === id) cfg.setGlobal(null);
                 const m = cfg.byChat(); for (const key of Object.keys(m)) if (m[key] === id) delete m[key];
+                if (swTab === 'user') {
+                    const byPersona = swGetSettings().sharedUserActiveByPersona;
+                    for (const key of Object.keys(byPersona)) if (byPersona[key] === id) delete byPersona[key];
+                }
                 swSave();
             },
         };
     }
-    const cn = swCharName();
     return {
         shared: false, side: swTab,
-        list: () => swGetWardrobe(cn)[swTab],
-        activeId: () => swGetActive()[swTab],
-        setActive: (id) => swSetActive(swTab, id),
-        find: (id) => swFind(cn, swTab, id),
-        add: (o) => swAdd(cn, swTab, o),
-        remove: (id) => swRemove(cn, swTab, id),
+        list: () => swGetPersonalList(swTab),
+        activeId: () => swGetPersonalActiveId(swTab),
+        setActive: (id) => swSetPersonalActiveId(swTab, id),
+        find: (id) => swGetPersonalList(swTab).find(o => o.id === id) || null,
+        add: (o) => { swGetPersonalList(swTab).push(o); swSave(); },
+        remove: (id) => {
+            const list = swGetPersonalList(swTab);
+            const index = list.findIndex(o => o.id === id);
+            if (index >= 0) list.splice(index, 1);
+            if (swGetPersonalActiveId(swTab) === id) swSetPersonalActiveId(swTab, null);
+            swSave();
+        },
     };
 }
 
@@ -344,17 +450,94 @@ function swSharedHasSrc(side, srcId) {
 function swCollectPendingOutfits(side) {
     const s = swGetSettings();
     const out = [];
+    const seen = new Set();
+    const collect = (o) => {
+        if (!o?.id || seen.has(o.id) || (!o.base64 && !o.imagePath) || swSharedHasSrc(side, o.id)) return;
+        out.push(o);
+        seen.add(o.id);
+    };
     for (const w of Object.values(s.wardrobes || {})) {
         if (!w || !Array.isArray(w[side])) continue;
-        for (const o of w[side]) if ((o.base64 || o.imagePath) && !swSharedHasSrc(side, o.id)) out.push(o);
+        for (const o of w[side]) collect(o);
+    }
+    if (side === 'user') {
+        for (const outfits of Object.values(s.personaWardrobes || {})) {
+            if (!Array.isArray(outfits)) continue;
+            for (const o of outfits) collect(o);
+        }
     }
     return out;
 }
 
-function swAutoWearSharedFromCurrent(side, { force = false } = {}) {
+const swSharedSyncPromises = { bot: null, user: null };
+
+async function swMigrateToSharedUnlocked(side, { silent = false } = {}) {
     const s = swGetSettings();
-    const cn = swCharName(); if (!cn) return null;
-    const wornId = s.activeOutfits?.[cn]?.[side];
+    const cfg = swSharedCfg(side);
+    const pending = swCollectPendingOutfits(side);
+    if (!pending.length) {
+        if (!silent) toastr.info('Все наряды уже добавлены в общий гардероб', 'Гардероб');
+        return 0;
+    }
+
+    if (!silent) toastr.info(`Добавляю ${pending.length} ${swPlural(pending.length, 'наряд', 'наряда', 'нарядов')} в общий гардероб…`, 'Гардероб', { timeOut: 4000 });
+    let done = 0;
+    let failed = 0;
+    for (const o of pending) {
+        try {
+            const item = {
+                id: uid(), srcId: o.id, name: o.name || 'Без имени',
+                description: o.description || '', type: swTypeOf(o),
+                addedAt: o.addedAt || Date.now(),
+            };
+            if (o.tryOnSide) item.tryOnSide = o.tryOnSide;
+
+            let stored = false;
+            if (o.imagePath && !o.base64) {
+                item.imagePath = o.imagePath;
+                stored = true;
+            } else if (o.base64) {
+                try {
+                    const image = await swCompressBase64Image(o.base64, s.maxDimension, 0.82);
+                    item.imagePath = await swSaveRefImageToFile(image, cfg.fileLabel() + (o.name || 'item'));
+                    stored = true;
+                } catch (error) {
+                    iigLog('WARN', 'shared wardrobe import file store failed, fallback to base64:', error.message);
+                }
+            }
+            if (!stored) item.base64 = o.base64 || '';
+            cfg.list().push(item);
+            done++;
+            if (done % 5 === 0) swSave();
+        } catch (error) {
+            failed++;
+            iigLog('WARN', 'shared wardrobe import failed:', error.message);
+        }
+    }
+
+    swSave();
+    const worn = swAutoWearSharedFromCurrent(side, { force: true });
+    await swPreloadSharedActive(side);
+    if (!silent) toastr.success(`Добавлено: ${done}${failed ? `, не удалось: ${failed}` : ''}.${worn ? ` Надет «${worn}».` : ''} Оригиналы сохранены.`, 'Гардероб', { timeOut: 5000 });
+    if (silent && failed) iigLog('WARN', `Automatic shared wardrobe sync: ${done} added, ${failed} failed`);
+    return done;
+}
+
+async function swMigrateToShared(side, options = {}) {
+    if (swSharedSyncPromises[side]) return swSharedSyncPromises[side];
+    const promise = swMigrateToSharedUnlocked(side, options);
+    swSharedSyncPromises[side] = promise;
+    try { return await promise; }
+    finally { swSharedSyncPromises[side] = null; }
+}
+
+function swAutoSyncShared(side) {
+    swMigrateToShared(side, { silent: true }).then((added) => {
+        if (added && swOpen && swTab === side) swRender();
+    }).catch((error) => iigLog('WARN', `Automatic shared wardrobe sync (${side}) failed:`, error.message));
+}
+function swAutoWearSharedFromCurrent(side, { force = false } = {}) {
+    const wornId = swGetPersonalActiveId(side);
     if (!wornId) return null;
     if (!force && swGetSharedActiveId(side)) return null;
     const copy = swSharedCfg(side).list().find(x => x.srcId === wornId);
@@ -452,6 +635,8 @@ const SW_DEFAULT_GENLOOK_PROMPT =
     + ' Natural relaxed standing pose facing the viewer, the entire figure visible from head to shoes, simple uncluttered background that does not distract from the character.'
     + ' {{outfit}}';
 
+const SW_DEFAULT_BUILD_SLOTS = ['Причёска', 'Верх наряда', 'Низ наряда', 'Обувь', 'Аксессуары'];
+
 function swBuildTryOnPrompt(side, outfitDesc, { fromDescription = false } = {}) {
     const ctx = SillyTavern.getContext();
     const name = side === 'bot' ? (swCharName() || 'the character') : (ctx.name1 || 'the user');
@@ -471,8 +656,12 @@ function swBuildTryOnPrompt(side, outfitDesc, { fromDescription = false } = {}) 
         .replace(/[ \t]{2,}/g, ' ')
         .trim();
 }
-
 async function swTryOnGenerate(side, outfitB64, outfitDesc) {
+    const prompt = swBuildTryOnPrompt(side, outfitDesc, { fromDescription: !outfitB64 });
+    return swGenerateWardrobeImage(side, outfitB64 ? [outfitB64] : [], prompt);
+}
+
+async function swGenerateWardrobeImage(side, extraReferences, prompt) {
     validateProviderSettings();
     const settings = getSettings();
     const provider = resolveActiveProvider(settings);
@@ -485,13 +674,11 @@ async function swTryOnGenerate(side, outfitB64, outfitDesc) {
             : 'Нет референса персоны: выберите аватар персоны в ST');
     }
 
-    const fromDescription = !outfitB64;
-    const rawReferences = fromDescription ? [personB64] : [personB64, outfitB64];
+    const rawReferences = [personB64, ...extraReferences.filter(Boolean)];
     const dataUrlProviders = new Set(['openrouter', 'void', 'aigate', 'naistera']);
     const references = dataUrlProviders.has(provider.id)
-        ? rawReferences.map((b64) => `data:image/png;base64,${b64}`)
-        : rawReferences;
-    const prompt = swBuildTryOnPrompt(side, outfitDesc, { fromDescription });
+        ? rawReferences.map((value) => value.startsWith('data:') ? value : `data:image/png;base64,${value}`)
+        : rawReferences.map((value) => value.startsWith('data:') ? value.slice(value.indexOf(',') + 1) : value);
 
     const generated = await provider.generate({
         prompt,
@@ -507,6 +694,55 @@ async function swTryOnGenerate(side, outfitB64, outfitDesc) {
     }
     const png = await convertDataUrlToPng(output);
     return parseImageDataUrl(png).base64Data;
+}
+
+function swLoadBase64Image(base64) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Не удалось прочитать изображение слота'));
+        img.src = base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`;
+    });
+}
+
+async function swBuildReferenceSheet(slots) {
+    const filled = slots.filter(slot => slot.base64);
+    if (!filled.length) throw new Error('Добавьте хотя бы одну картинку в слоты');
+    const columns = filled.length === 1 ? 1 : 2;
+    const cellW = 560, imageH = 470, labelH = 70, gap = 18, pad = 24;
+    const rows = Math.ceil(filled.length / columns);
+    const canvas = document.createElement('canvas');
+    canvas.width = pad * 2 + columns * cellW + (columns - 1) * gap;
+    canvas.height = pad * 2 + rows * (imageH + labelH) + (rows - 1) * gap;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f2f2f2'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    for (let index = 0; index < filled.length; index++) {
+        const slot = filled[index];
+        const col = index % columns, row = Math.floor(index / columns);
+        const x = pad + col * (cellW + gap), y = pad + row * (imageH + labelH + gap);
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(x, y, cellW, imageH + labelH);
+        const img = await swLoadBase64Image(slot.base64);
+        const scale = Math.min(cellW / img.width, imageH / img.height);
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        ctx.drawImage(img, x + (cellW - w) / 2, y + (imageH - h) / 2, w, h);
+        ctx.fillStyle = '#202020'; ctx.fillRect(x, y + imageH, cellW, labelH);
+        ctx.fillStyle = '#ffffff'; ctx.font = '600 27px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const label = `${index + 1}. ${String(slot.label || 'Деталь образа').slice(0, 42)}`;
+        ctx.fillText(label, x + cellW / 2, y + imageH + labelH / 2, cellW - 24);
+    }
+    return canvas.toDataURL('image/jpeg', 0.9);
+}
+
+async function swBuildOutfitGenerate(side, slots, extraDescription) {
+    const filled = slots.filter(slot => slot.base64);
+    const sheet = await swBuildReferenceSheet(filled);
+    const ctx = SillyTavern.getContext();
+    const name = side === 'bot' ? (swCharName() || 'the character') : (ctx.name1 || 'the user');
+    const componentList = filled.map((slot, index) => `${index + 1}. ${slot.label || 'outfit component'}`).join('\n');
+    const prompt = `Virtual outfit assembly and try-on. Generate a polished FULL-BODY, head-to-toe image of ${name}, preserving the exact identity, face, body proportions and art style from the first PERSON REFERENCE. The second reference is a labeled OUTFIT COMPONENT BOARD. Combine its separate references into one coherent finished look.\n\nComponents:\n${componentList}\n\nUse every supplied component in its labeled role. A hairstyle reference changes hair styling only while preserving identity and facial features. Clothing references define garments, cut, colors, fabrics and patterns. Footwear and accessories must remain clearly represented. Harmonize fit and small unspecified transitions without replacing or redesigning the referenced items. Do not reproduce the board, labels, text, borders, collage layout, extra people or mannequins. Show one person only, naturally standing, entire figure visible from hair to shoes, with a simple unobtrusive background.${extraDescription ? `\n\nAdditional direction: ${extraDescription}` : ''}`;
+    return swGenerateWardrobeImage(side, [sheet], prompt);
 }
 
 async function swShrinkForStore(b64) {
@@ -550,9 +786,11 @@ export function swOpenModal() {
     for (const t of m.querySelectorAll('.sw-tab')) t.addEventListener('click', () => {
         swTab = t.dataset.tab; swFilter = 'all'; swPage = 0;
         m.querySelectorAll('.sw-tab').forEach(x => x.classList.toggle('sw-tab-active', x.dataset.tab === swTab)); swRender();
+        swAutoSyncShared(swTab);
     });
     swFilter = 'all'; swPage = 0;
     swRender();
+    swAutoSyncShared(swTab);
     document.addEventListener('keydown', swEsc);
 }
 
@@ -579,9 +817,13 @@ function swRender() {
     // Mode: Personal / Shared
     {
         const useShared = v.shared;
+        const personalLabel = swTab === 'user' ? 'Персона' : 'Персонаж';
+        const personalTitle = swTab === 'user'
+            ? `Гардероб персоны ${esc(swPersonaLabel())} во всех чатах`
+            : 'Гардероб текущего персонажа';
         const sortOpt = (val, label) => `<option value="${val}" ${swSort === val ? 'selected' : ''}>${label}</option>`;
         h += `<div class="sw-mode-row">
-            <div class="sw-mode-btn ${!useShared ? 'sw-mode-active' : ''}" data-mode="perc"><i class="fa-solid fa-user"></i> Перс</div>
+            <div class="sw-mode-btn ${!useShared ? 'sw-mode-active' : ''}" data-mode="perc" title="${personalTitle}"><i class="fa-solid fa-user"></i> ${personalLabel}</div>
             <div class="sw-mode-btn ${useShared ? 'sw-mode-active' : ''}" data-mode="shared"><i class="fa-solid fa-earth-americas"></i> Общий</div>
             <div class="sw-sort-wrap" title="Сортировка">
                 <i class="fa-solid fa-arrow-down-wide-short"></i>
@@ -611,7 +853,8 @@ function swRender() {
     const pageItems = shown.slice(swPage * SW_PAGE_SIZE, (swPage + 1) * SW_PAGE_SIZE);
 
     h += '<div class="sw-outfit-grid"><div class="sw-outfit-card sw-upload-card" id="sw-upload-trigger"><div class="sw-upload-icon"><i class="fa-solid fa-plus"></i></div><span>Загрузить</span></div>'
-        + '<div class="sw-outfit-card sw-upload-card" id="sw-gen-trigger" title="Сгенерировать образ по текстовому описанию (ИИ): референсом уходит только аватар"><div class="sw-upload-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div><span>Сгенерировать</span></div>';
+        + '<div class="sw-outfit-card sw-upload-card" id="sw-gen-trigger" title="Сгенерировать образ по текстовому описанию (ИИ): референсом уходит только аватар"><div class="sw-upload-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div><span>Сгенерировать</span></div>'
+        + '<div class="sw-outfit-card sw-upload-card" id="sw-build-trigger" title="Собрать единый образ из нескольких референсов: причёска, верх, низ, обувь и аксессуары"><div class="sw-upload-icon"><i class="fa-solid fa-layer-group"></i></div><span>Собрать образ</span></div>';
     for (const o of pageItems) {
         const a = o.id === aid;
         const oDesc = swSanitizeDesc(o.description);
@@ -658,10 +901,14 @@ function swRender() {
             if (cfg.use() === wantShared) return;
             cfg.setUse(wantShared); swSave();
             swFilter = 'all'; swPage = 0;
+            if (wantShared) await swMigrateToShared(swTab, { silent: true });
             swPreloadSharedActive(swTab);
             swRender(); swUpdatePromptInjection(); swInjectBarBtn();
             const sideName = swTab === 'bot' ? 'Бот' : 'Юзер';
-            toastr.info(`${sideName}: ${wantShared ? 'общий гардероб (для всех персонажей)' : 'персональный гардероб'}`, 'Гардероб', { timeOut: 2000 });
+            const personalMode = swTab === 'user'
+                ? `гардероб персоны ${swPersonaLabel()} (во всех чатах)`
+                : 'гардероб текущего персонажа';
+            toastr.info(`${sideName}: ${wantShared ? 'общий гардероб (для всех персонажей)' : personalMode}`, 'Гардероб', { timeOut: 2000 });
             if (wantShared) {
                 swAutoWearSharedFromCurrent(swTab, { force: false });
                 swPage = 0; swRender(); swUpdatePromptInjection(); swInjectBarBtn();
@@ -681,6 +928,7 @@ function swRender() {
 
     document.getElementById('sw-upload-trigger')?.addEventListener('click', swUpload);
     document.getElementById('sw-gen-trigger')?.addEventListener('click', () => swOpenOutfitForm({ mode: 'gen', view: swCurrentView() }));
+    document.getElementById('sw-build-trigger')?.addEventListener('click', () => swOpenOutfitForm({ mode: 'build', view: swCurrentView() }));
     for (const card of c.querySelectorAll('.sw-outfit-card[data-id]')) {
         const id = card.dataset.id;
         card.querySelector('.sw-outfit-img')?.addEventListener('click', (e) => { e.preventDefault(); e.stopImmediatePropagation(); swToggle(id); });
@@ -747,6 +995,9 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
     document.getElementById('sw-form-overlay')?.remove();
     const isEdit = mode === 'edit';
     const isGen = mode === 'gen';
+    const isBuild = mode === 'build';
+    const isGeneratedMode = isGen || isBuild;
+    const buildSlots = isBuild ? SW_DEFAULT_BUILD_SLOTS.map(label => ({ id: uid(), label, base64: null, fileName: '' })) : [];
     const curType = isEdit ? swTypeOf(item) : (swTypeIds().includes(swFilter) ? swFilter : 'other');
     const previewSrc = isEdit ? swImgSrc(item) : (base64 ? 'data:image/png;base64,' + base64 : '');
     const curName = isEdit ? (item.name || '') : (defaultName || '');
@@ -759,28 +1010,31 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
     const ov = document.createElement('div'); ov.id = 'sw-form-overlay';
     ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
     const panel = document.createElement('div'); panel.id = 'sw-form';
+    if (isBuild) panel.classList.add('sw-form-build');
     panel.innerHTML = `
-        <div class="sw-form-header"><span>${isEdit ? 'Редактировать образ' : (isGen ? 'Образ по описанию' : 'Новый образ')}</span><div class="sw-form-close" title="Закрыть"><i class="fa-solid fa-xmark"></i></div></div>
+        <div class="sw-form-header"><span>${isEdit ? 'Редактировать образ' : (isBuild ? 'Конструктор образа' : (isGen ? 'Образ по описанию' : 'Новый образ'))}</span><div class="sw-form-close" title="Закрыть"><i class="fa-solid fa-xmark"></i></div></div>
         <div class="sw-form-body">
-            <div class="sw-form-preview"><img src="${esc(previewSrc)}" alt="preview" ${isGen ? 'hidden' : ''}>${isGen ? '<div class="sw-form-preview-empty" id="sw-gen-empty"><i class="fa-solid fa-wand-magic-sparkles"></i><span>Опишите образ и нажмите «Сгенерировать»</span></div>' : ''}</div>
+            ${isBuild ? '<div class="sw-build-intro">Добавьте референсы деталей. Название слота подскажет ИИ, какую роль играет картинка.</div><div class="sw-build-slots" id="sw-build-slots"></div><div class="sw-build-add" id="sw-build-add"><i class="fa-solid fa-plus"></i> Добавить слот</div>' : ''}
+            <div class="sw-form-preview"><img src="${esc(previewSrc)}" alt="preview" ${isGeneratedMode ? 'hidden' : ''}>${isGeneratedMode ? `<div class="sw-form-preview-empty" id="sw-gen-empty"><i class="fa-solid ${isBuild ? 'fa-layer-group' : 'fa-wand-magic-sparkles'}"></i><span>${isBuild ? 'Заполните слоты и нажмите «Собрать»' : 'Опишите образ и нажмите «Сгенерировать»'}</span></div>` : ''}</div>
             <div class="sw-tryon-row">
-                <select class="text_pole sw-tryon-select" id="sw-tryon-target" title="${isGen ? 'На кого сгенерировать образ' : 'На кого примерить наряд'}">
+                <select class="text_pole sw-tryon-select" id="sw-tryon-target" title="${isGeneratedMode ? 'Для кого создать образ' : 'На кого примерить наряд'}">
                     <option value="bot" ${view.side === 'bot' ? 'selected' : ''}>На персонажа — ${esc(charNm)}</option>
                     <option value="user" ${view.side === 'user' ? 'selected' : ''}>На персону — ${esc(userNm)}</option>
                 </select>
-                <div class="sw-tryon-btn" id="sw-tryon-btn"><i class="fa-solid ${isGen ? 'fa-wand-magic-sparkles' : 'fa-person-rays'}"></i> ${isGen ? 'Сгенерировать' : 'Примерить'}</div>
+                <div class="sw-tryon-btn" id="sw-tryon-btn"><i class="fa-solid ${isBuild ? 'fa-layer-group' : (isGen ? 'fa-wand-magic-sparkles' : 'fa-person-rays')}"></i> ${isBuild ? 'Собрать' : (isGen ? 'Сгенерировать' : 'Примерить')}</div>
             </div>
             <div class="sw-tryon-status" id="sw-tryon-status" hidden></div>
             <div class="sw-tryon-pick" id="sw-tryon-pick" hidden>
                 <div class="sw-tryon-opt" data-pick="orig" title="Сохранить исходную картинку наряда"><img alt="оригинал"><span>Оригинал</span></div>
                 <div class="sw-tryon-opt" data-pick="gen" title="Сохранить сгенерированную примерку"><img alt="примерка"><span>Примерка</span></div>
             </div>
+            ${isBuild ? '<label class="sw-form-label">Сохранить итог</label><select class="text_pole sw-form-input" id="sw-build-result-kind"><option value="avatar">Как примерку / аватар (человек уже в образе)</option><option value="outfit">Как обычный наряд (референс одежды)</option></select>' : ''}
             <label class="sw-form-label">Название</label>
             <input type="text" class="text_pole sw-form-input" id="sw-form-name" value="${esc(curName)}" placeholder="Название образа">
             <label class="sw-form-label">Тип одежды</label>
             <select class="text_pole sw-form-input" id="sw-form-type">${swTypes().map(t => `<option value="${t.id}" ${curType === t.id ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}</select>
             <label class="sw-form-label">Описание <span class="sw-form-ai" id="sw-form-ai" title="Сгенерировать описание по картинке (ИИ)"><i class="fa-solid fa-wand-magic-sparkles"></i> ИИ</span></label>
-            <textarea class="text_pole sw-form-textarea" id="sw-form-desc" rows="4" placeholder="${isGen ? 'Опишите образ: одежда, цвета, ткани, аксессуары, обувь…' : 'Что на образе: одежда, цвета, ткани, аксессуары…'}">${esc(curDesc)}</textarea>
+            <textarea class="text_pole sw-form-textarea" id="sw-form-desc" rows="4" placeholder="${isBuild ? 'Дополнительные пожелания к итоговому образу (необязательно)…' : (isGen ? 'Опишите образ: одежда, цвета, ткани, аксессуары, обувь…' : 'Что на образе: одежда, цвета, ткани, аксессуары…')}">${esc(curDesc)}</textarea>
             <div class="sw-form-actions">
                 <div class="sw-form-btn sw-form-cancel">Отмена</div>
                 <div class="sw-form-btn sw-form-save">${isEdit ? 'Сохранить' : 'Добавить'}</div>
@@ -793,6 +1047,55 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
     document.addEventListener('keydown', formEsc, true);
     panel.querySelector('.sw-form-close').addEventListener('click', close);
     panel.querySelector('.sw-form-cancel').addEventListener('click', close);
+
+    function renderBuildSlots() {
+        if (!isBuild) return;
+        const container = panel.querySelector('#sw-build-slots');
+        container.innerHTML = buildSlots.map((slot, index) => `
+            <div class="sw-build-slot ${slot.base64 ? 'sw-build-slot-filled' : ''}" data-slot-id="${slot.id}">
+                <div class="sw-build-slot-preview" title="Выбрать картинку">
+                    ${slot.base64 ? `<img src="data:image/png;base64,${slot.base64}" alt="${esc(slot.label)}">` : '<i class="fa-solid fa-image"></i><span>Картинка</span>'}
+                </div>
+                <div class="sw-build-slot-fields">
+                    <input class="text_pole sw-build-slot-label" value="${esc(slot.label)}" placeholder="Что это за часть образа?">
+                    <div class="sw-build-slot-file">${esc(slot.fileName || 'Файл не выбран')}</div>
+                </div>
+                <div class="sw-build-slot-remove" title="Удалить слот"><i class="fa-solid fa-xmark"></i></div>
+                <span class="sw-build-slot-number">${index + 1}</span>
+            </div>`).join('');
+
+        for (const row of container.querySelectorAll('.sw-build-slot')) {
+            const slot = buildSlots.find(value => value.id === row.dataset.slotId);
+            if (!slot) continue;
+            row.querySelector('.sw-build-slot-label').addEventListener('input', event => { slot.label = event.target.value; });
+            row.querySelector('.sw-build-slot-remove').addEventListener('click', () => {
+                const index = buildSlots.findIndex(value => value.id === slot.id);
+                if (index >= 0) buildSlots.splice(index, 1);
+                renderBuildSlots();
+            });
+            row.querySelector('.sw-build-slot-preview').addEventListener('click', () => {
+                const input = document.createElement('input');
+                input.type = 'file'; input.accept = 'image/*';
+                input.addEventListener('change', async () => {
+                    const file = input.files?.[0]; if (!file) return;
+                    try {
+                        const resized = await swResize(file, 900);
+                        slot.base64 = resized.base64; slot.fileName = file.name;
+                        renderBuildSlots();
+                    } catch (error) { toastr.error('Не удалось загрузить слот: ' + error.message, 'Конструктор образа'); }
+                });
+                input.click();
+            });
+        }
+    }
+
+    if (isBuild) {
+        panel.querySelector('#sw-build-add').addEventListener('click', () => {
+            buildSlots.push({ id: uid(), label: `Деталь ${buildSlots.length + 1}`, base64: null, fileName: '' });
+            renderBuildSlots();
+        });
+        renderBuildSlots();
+    }
 
     let origB64 = base64;
     async function getFormImageB64() {
@@ -807,8 +1110,8 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         if (aiBtn.classList.contains('sw-form-ai-loading')) return;
         aiBtn.classList.add('sw-form-ai-loading');
         try {
-            const b64 = isGen ? genB64 : await getFormImageB64();
-            if (!b64) { toastr.warning(isGen ? 'Сначала сгенерируйте образ' : 'Нет картинки для анализа', 'Гардероб'); return; }
+            const b64 = isGeneratedMode ? genB64 : await getFormImageB64();
+            if (!b64) { toastr.warning(isGeneratedMode ? 'Сначала создайте образ' : 'Нет картинки для анализа', 'Гардероб'); return; }
             const desc = await swAnalyzeOutfit(b64);
             if (desc) panel.querySelector('#sw-form-desc').value = desc;
             else toastr.warning('Не удалось получить описание', 'Гардероб');
@@ -826,9 +1129,9 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
     const tryPick = panel.querySelector('#sw-tryon-pick');
 
     function refreshTryOnUI() {
-        tryPick.hidden = !genB64 || isGen;
+        tryPick.hidden = !genB64 || isGeneratedMode;
         if (genB64) {
-            if (!isGen) tryPick.querySelector('[data-pick="orig"] img').src = previewSrc;
+            if (!isGeneratedMode) tryPick.querySelector('[data-pick="orig"] img').src = previewSrc;
             tryPick.querySelector('[data-pick="gen"] img').src = 'data:image/png;base64,' + genB64;
             for (const o of tryPick.querySelectorAll('.sw-tryon-opt')) o.classList.toggle('sw-tryon-sel', o.dataset.pick === picked);
         }
@@ -850,15 +1153,18 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         try {
             const descNow = panel.querySelector('#sw-form-desc').value.trim();
             if (isGen && !descNow) throw new Error('Сначала опишите образ');
-            const srcB64 = isGen ? null : await getFormImageB64();
-            if (!isGen && !srcB64) throw new Error('Не удалось получить картинку наряда');
-            tryStatus.textContent = `${isGen ? 'Генерация образа' : 'Генерация примерки'}… (обычно 15–60 секунд)`;
-            const out = await swTryOnGenerate(side, srcB64, descNow);
+            const srcB64 = isGeneratedMode ? null : await getFormImageB64();
+            if (!isGeneratedMode && !srcB64) throw new Error('Не удалось получить картинку наряда');
+            if (isBuild && !buildSlots.some(slot => slot.base64)) throw new Error('Добавьте хотя бы одну картинку в слоты');
+            tryStatus.textContent = `${isBuild ? 'Сборка образа' : (isGen ? 'Генерация образа' : 'Генерация примерки')}… (обычно 15–60 секунд)`;
+            const out = isBuild
+                ? await swBuildOutfitGenerate(side, buildSlots, descNow)
+                : await swTryOnGenerate(side, srcB64, descNow);
             if (!document.body.contains(panel)) return;
             genB64 = out; genSide = side; picked = 'gen';
             refreshTryOnUI();
             tryStatus.hidden = true;
-            toastr.success(isGen ? 'Образ готов — заполните название и сохраните его' : 'Примерка готова. Выберите картинку для сохранения', 'Гардероб', { timeOut: 4000 });
+            toastr.success(isGeneratedMode ? 'Образ готов — заполните название и сохраните его' : 'Примерка готова. Выберите картинку для сохранения', 'Гардероб', { timeOut: 4000 });
         } catch (e) {
             iigLog('ERROR', 'try-on failed:', e);
             if (document.body.contains(panel)) { tryStatus.hidden = false; tryStatus.textContent = '⚠ ' + String(e.message || e); }
@@ -866,7 +1172,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         } finally {
             if (document.body.contains(panel)) {
                 tryBtn.classList.remove('sw-tryon-busy');
-                tryBtn.innerHTML = `<i class="fa-solid ${isGen ? 'fa-wand-magic-sparkles' : 'fa-person-rays'}"></i> ${isGen ? 'Сгенерировать' : 'Примерить'}`;
+                tryBtn.innerHTML = `<i class="fa-solid ${isBuild ? 'fa-layer-group' : (isGen ? 'fa-wand-magic-sparkles' : 'fa-person-rays')}"></i> ${isBuild ? 'Собрать' : (isGen ? 'Сгенерировать' : 'Примерить')}`;
             }
         }
     });
@@ -878,10 +1184,11 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         const type = panel.querySelector('#sw-form-type').value;
         const desc = panel.querySelector('#sw-form-desc').value.trim();
         const saveBtn = panel.querySelector('.sw-form-save');
-        if (isGen && !genB64) { toastr.warning('Сначала сгенерируйте образ', 'Гардероб'); return; }
+        if (isGeneratedMode && !genB64) { toastr.warning('Сначала создайте образ', 'Гардероб'); return; }
         saveBtn.classList.add('sw-form-btn-busy'); saveBtn.textContent = 'Сохранение…';
         try {
             const useGen = picked === 'gen' && !!genB64;
+            const saveAsTryOn = !isBuild || panel.querySelector('#sw-build-result-kind')?.value !== 'outfit';
             if (isEdit) {
                 item.name = name; item.type = type; item.description = desc;
                 if (useGen) {
@@ -904,7 +1211,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
             } else {
                 const newItem = { id: uid(), name, type, description: desc, addedAt: Date.now() };
                 const imgB64 = useGen ? genB64 : base64;
-                if (useGen && genSide) newItem.tryOnSide = genSide;
+                if (useGen && genSide && saveAsTryOn) newItem.tryOnSide = genSide;
                 if (view.shared) {
                     let stored = false;
                     try {
@@ -919,6 +1226,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
                 }
                 view.add(newItem);
                 if (view.shared) swPreloadSharedActive(view.side);
+                else await swMigrateToShared(view.side, { silent: true });
                 swSort = 'added'; swPage = 0;
             }
             close();
@@ -1120,6 +1428,9 @@ function swCollectReferencedFiles() {
         for (const w of Object.values(sw.wardrobes || {})) {
             if (!w) continue;
             for (const side of ['bot', 'user']) for (const o of (w[side] || [])) addRef(o.imagePath);
+        }
+        for (const outfits of Object.values(sw.personaWardrobes || {})) {
+            for (const o of (outfits || [])) addRef(o.imagePath);
         }
     }
     const iig = ctx.extensionSettings?.[MODULE_NAME];
@@ -1455,6 +1766,10 @@ export function swFindItem(id) {
             if (found) return found;
         }
     }
+    for (const outfits of Object.values(s.personaWardrobes || {})) {
+        const found = (outfits || []).find(o => o.id === id);
+        if (found) return found;
+    }
     return null;
 }
 
@@ -1499,6 +1814,14 @@ export function initWardrobe() {
     swGetSettings();
     const ctx = SillyTavern.getContext();
 
+    loadPersonasModule().then((module) => {
+        swPersonasModule = module;
+        swEnsurePersonaWardrobe();
+        swPreloadSharedActive('user');
+        swUpdatePromptInjection();
+        if (swOpen) swRender();
+    }).catch((error) => iigLog('WARN', 'Wardrobe persona module unavailable:', error?.message || error));
+
     ctx.eventSource.on(ctx.event_types.APP_READY, () => {
         setTimeout(() => { swPreloadAllShared(); swUpdatePromptInjection(); swInjectBarBtn(); }, 500);
     });
@@ -1506,6 +1829,18 @@ export function initWardrobe() {
     ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, () => {
         setTimeout(() => { swPreloadAllShared(); swUpdatePromptInjection(); swInjectBarBtn(); }, 300);
     });
+
+    if (ctx.event_types.PERSONA_CHANGED) {
+        ctx.eventSource.on(ctx.event_types.PERSONA_CHANGED, () => {
+            setTimeout(() => {
+                swEnsurePersonaWardrobe();
+                swPreloadSharedActive('user');
+                swUpdatePromptInjection();
+                swInjectBarBtn();
+                if (swOpen) { swPage = 0; swRender(); }
+            }, 100);
+        });
+    }
 
     const _genEvents = ['GENERATION_STARTED', 'GENERATE_BEFORE_COMBINE_PROMPTS', 'GENERATION_AFTER_COMMANDS', 'MESSAGE_SENT'];
     for (const evName of _genEvents) {

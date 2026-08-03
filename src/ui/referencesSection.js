@@ -159,7 +159,9 @@ export function buildReferencesSettingsSectionHtml(settings = getSettings()) {
     const isOpenRouter = settings.apiType === 'openrouter';
     const isElectronHub = settings.apiType === 'electronhub';
     const isVoid = settings.apiType === 'void';
-    const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid) && refsSupported;
+    const isAIGate = settings.apiType === 'aigate';
+    const isProblembo = settings.apiType === 'problembo';
+    const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid || isAIGate || isProblembo) && refsSupported;
     const naisteraRefsVisible = settings.apiType === 'naistera' && refsSupported;
 
     // Заголовок секции аватаров — по активному провайдеру. Provider-brand
@@ -168,6 +170,8 @@ export function buildReferencesSettingsSectionHtml(settings = getSettings()) {
     if (isOpenRouter) avatarRefsTitle = 'OpenRouter';
     else if (isElectronHub) avatarRefsTitle = 'Electron Hub';
     else if (isVoid) avatarRefsTitle = 'VoidAI / RouteMyAI';
+    else if (isAIGate) avatarRefsTitle = 'AIGate';
+    else if (isProblembo) avatarRefsTitle = 'Problembo';
     else if (isOpenAI) avatarRefsTitle = 'OpenAI / GPT Image';
     else avatarRefsTitle = 'Gemini / nano-banana';
 

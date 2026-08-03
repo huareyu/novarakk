@@ -175,7 +175,7 @@ function formatProviderError(error) {
  * reference images — OpenAI / ElectronHub (/v1/images/edits), Gemini,
  * OpenRouter, Naistera.
  */
-const REF_INSTRUCTION_PROVIDERS = new Set(['openai', 'electronhub', 'gemini', 'openrouter', 'naistera']);
+const REF_INSTRUCTION_PROVIDERS = new Set(['openai', 'electronhub', 'gemini', 'openrouter', 'naistera', 'problembo']);
 
 /**
  * Приводит любой представление референса (base64 строка или data URL)

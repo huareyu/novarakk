@@ -1390,11 +1390,20 @@
 .iig-modal {
     position: fixed;
     inset: 0;
-    z-index: 5000;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 100050;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 16px;
+    padding-top: max(16px, env(safe-area-inset-top));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    padding-left: max(16px, env(safe-area-inset-left));
+    box-sizing: border-box;
+    overflow: auto;
+    overscroll-behavior: contain;
 }
 
 .iig-modal-backdrop {
@@ -1408,6 +1417,7 @@
     z-index: 1;
     width: min(520px, 100%);
     max-width: 100%;
+    max-height: 100%;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -1416,6 +1426,8 @@
     background: var(--SmartThemeBlurTintColor);
     border: 1px solid var(--SmartThemeBorderColor);
     box-sizing: border-box;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 .iig-modal-header {
@@ -1440,6 +1452,27 @@
     display: flex;
     justify-content: flex-end;
     gap: 8px;
+    flex-shrink: 0;
+}
+
+@media (max-width: 600px) {
+    .iig-modal {
+        align-items: flex-start;
+        padding-top: max(10px, env(safe-area-inset-top));
+        padding-right: max(10px, env(safe-area-inset-right));
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
+        padding-left: max(10px, env(safe-area-inset-left));
+    }
+
+    .iig-modal-card {
+        width: 100%;
+        margin: auto 0;
+        max-height: 100%;
+    }
+
+    .iig-modal-textarea {
+        min-height: 110px;
+    }
 }
 
 /* Last request popup */
@@ -3186,6 +3219,7 @@
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
     overflow: hidden;
 }
+#sw-form.sw-form-build { width: min(680px, 94vw); }
 .sw-form-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 14px; font-size: 14px;
@@ -3231,6 +3265,49 @@
 }
 .sw-form-save:hover { opacity: 0.9; }
 .sw-form-btn-busy { opacity: 0.6; pointer-events: none; }
+
+/* ── Outfit builder ── */
+.sw-build-intro {
+    font-size: 12px; line-height: 1.4; color: var(--SmartThemeQuoteColor, #aaa);
+    padding: 8px 10px; border-left: 3px solid var(--SmartThemeBodyColor, #ddd);
+    background: rgba(255, 255, 255, 0.035);
+}
+.sw-build-slots { display: flex; flex-direction: column; gap: 7px; }
+.sw-build-slot {
+    position: relative; display: grid; grid-template-columns: 86px minmax(0, 1fr) 38px;
+    min-height: 86px; border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.13));
+    background: rgba(0, 0, 0, 0.18); overflow: hidden;
+}
+.sw-build-slot-preview {
+    min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 5px; cursor: pointer; color: var(--SmartThemeQuoteColor, #999);
+    background: rgba(0, 0, 0, 0.28); border-right: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
+    font-size: 10px;
+}
+.sw-build-slot-preview i { font-size: 20px; }
+.sw-build-slot-preview img { width: 100%; height: 86px; object-fit: cover; display: block; }
+.sw-build-slot-preview:hover { color: var(--SmartThemeBodyColor, #eee); }
+.sw-build-slot-fields { min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 8px; }
+.sw-build-slot-label { width: 100%; box-sizing: border-box; border-radius: 0 !important; }
+.sw-build-slot-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--SmartThemeQuoteColor, #888); }
+.sw-build-slot-remove {
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    color: var(--SmartThemeQuoteColor, #999); border-left: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.1));
+}
+.sw-build-slot-remove:hover { color: #ff7777; background: rgba(255, 70, 70, 0.08); }
+.sw-build-slot-number {
+    position: absolute; left: 4px; top: 4px; min-width: 18px; height: 18px; padding: 0 3px;
+    display: flex; align-items: center; justify-content: center; box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.72); color: #fff; font-size: 9px; pointer-events: none;
+}
+.sw-build-slot-filled { border-color: var(--SmartThemeQuoteColor, rgba(255, 255, 255, 0.3)); }
+.sw-build-add {
+    min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 7px;
+    cursor: pointer; user-select: none; font-size: 12px;
+    border: 1px dashed var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.25));
+    color: var(--SmartThemeQuoteColor, #aaa);
+}
+.sw-build-add:hover { color: var(--SmartThemeBodyColor, #eee); border-color: var(--SmartThemeQuoteColor, rgba(255, 255, 255, 0.45)); }
 
 /* ── Try-on (AI) in outfit form ── */
 .sw-tryon-row { display: flex; gap: 8px; align-items: stretch; }

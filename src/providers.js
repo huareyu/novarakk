@@ -36,6 +36,7 @@ import { NaisteraProvider } from './providers/naistera.js';
 import { VoidProvider } from './providers/voidai.js';
 import { AIGateProvider } from './providers/aigate.js';
 import { NovelAIProvider } from './providers/novelai.js';
+import { ProblemboProvider } from './providers/problembo.js';
 
 // Re-exports — сохраняем прежний публичный API providers.js.
 export {
@@ -56,6 +57,7 @@ export {
     VoidProvider,
     AIGateProvider,
     NovelAIProvider,
+    ProblemboProvider,
 };
 
 // ----- Registry -----
@@ -96,6 +98,7 @@ registerProvider(new NaisteraProvider());
 registerProvider(new VoidProvider());
 registerProvider(new AIGateProvider());
 registerProvider(new NovelAIProvider());
+registerProvider(new ProblemboProvider());
 
 // ----- Models fetcher (делегируется провайдеру) -----
 

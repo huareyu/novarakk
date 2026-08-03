@@ -74,7 +74,7 @@ export const defaultSettings = Object.freeze({
     suffixes: [],
     activeSuffixId: '',
     styleTags: ['GPT', 'Nano Banana', 'NovelAI', 'character', 'girl', 'boy', 'lighting'],
-    apiType: 'openai', // 'openai' | 'gemini' | 'openrouter' | 'electronhub' | 'naistera' | 'void' | 'novelai'
+    apiType: 'openai', // 'openai' | 'gemini' | 'openrouter' | 'electronhub' | 'naistera' | 'void' | 'aigate' | 'novelai' | 'problembo'
     endpoint: '',
     /**
      * Если true — endpoint используется «как есть» для генерации (никаких
@@ -111,6 +111,13 @@ export const defaultSettings = Object.freeze({
     electronhubGuidanceScale: 7.5,
     electronhubSteps: 50,
     electronhubEnableReferences: false, // Experimental: try to use /v1/images/edits with references
+    // Problembo specific (native asynchronous task API)
+    problemboNegativePrompt: '',
+    problemboStyle: '',
+    problemboSeed: '',
+    problemboAspectRatio: '',
+    problemboResolution: '',
+    problemboEnableReferences: true,
     // NovelAI specific (via ST server proxy)
     novelaiModel: 'nai-diffusion-4-5-full',
     novelaiSampler: 'k_dpmpp_2m',
@@ -222,6 +229,13 @@ export const CONNECTION_FIELDS = Object.freeze([
     'electronhubNegativePrompt',
     'electronhubGuidanceScale',
     'electronhubSteps',
+    'electronhubEnableReferences',
+    'problemboNegativePrompt',
+    'problemboStyle',
+    'problemboSeed',
+    'problemboAspectRatio',
+    'problemboResolution',
+    'problemboEnableReferences',
     'novelaiModel',
     'novelaiSampler',
     'novelaiScheduler',
@@ -415,6 +429,7 @@ export const DEFAULT_ENDPOINTS = Object.freeze({
     electronhub: 'https://api.electronhub.ai',
     void: 'https://api.voidai.app',
     aigate: 'https://api.aigate.shop',
+    problembo: 'https://problembo.com',
 });
 
 export const ENDPOINT_PLACEHOLDERS = Object.freeze({
@@ -425,6 +440,7 @@ export const ENDPOINT_PLACEHOLDERS = Object.freeze({
     naistera: 'https://naistera.org',
     void: 'https://api.voidai.app',
     aigate: 'https://api.aigate.shop',
+    problembo: 'https://problembo.com',
 });
 
 // ----- Settings accessors -----
@@ -581,10 +597,16 @@ export function normalizeConfiguredEndpoint(apiType, endpoint) {
         if (apiType === 'openrouter') return DEFAULT_ENDPOINTS.openrouter;
         if (apiType === 'electronhub') return DEFAULT_ENDPOINTS.electronhub;
         if (apiType === 'aigate') return DEFAULT_ENDPOINTS.aigate;
+        if (apiType === 'problembo') return DEFAULT_ENDPOINTS.problembo;
         return '';
     }
     if (apiType === 'naistera') {
         return trimmed.replace(/\/api\/generate$/i, '');
+    }
+    if (apiType === 'problembo') {
+        return trimmed
+            .replace(/\/apis\/v1\/client\/image-gen\/tasks$/i, '')
+            .replace(/\/apis\/v1\/client$/i, '');
     }
     return trimmed;
 }

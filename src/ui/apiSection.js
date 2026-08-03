@@ -96,6 +96,7 @@ export function buildApiSettingsSectionHtml(settings = getSettings()) {
                     <option value="void" ${settings.apiType === 'void' ? 'selected' : ''}>${t`VoidAI / RouteMyAI (chat-completions)`}</option>
                     <option value="aigate" ${settings.apiType === 'aigate' ? 'selected' : ''}>${t`AIGate (GPT Image + Gemini)`}</option>
                     <option value="novelai" ${settings.apiType === 'novelai' ? 'selected' : ''}>${t`NovelAI (via ST proxy)`}</option>
+                    <option value="problembo" ${settings.apiType === 'problembo' ? 'selected' : ''}>Problembo</option>
                 </select>
                 <div></div>
             </div>
@@ -264,6 +265,46 @@ export function buildApiSettingsSectionHtml(settings = getSettings()) {
                     </label>
                     <p class="hint" style="margin-top: 4px;">${t`Most ElectronHub models don't support references. Enable this only if your model supports /v1/images/edits endpoint.`}</p>
                 </div>
+            </div>
+
+            <div class="iig-settings-card-nested ${settings.apiType === 'problembo' ? '' : 'iig-hidden'}" id="iig_problembo_section">
+                <h4>Problembo</h4>
+                <p class="hint">${t`Uses the native Problembo task API. Enter a pbo_pat_ token and a model id from the Problembo catalog.`}</p>
+
+                <div class="flex-col" style="margin-top: 8px;">
+                    <label for="iig_problembo_negative_prompt">${t`Negative prompt`}</label>
+                    <textarea id="iig_problembo_negative_prompt" class="text_pole iig-settings-textarea" rows="2" placeholder="${t`Things to avoid in the image`}">${sanitizeForHtml(settings.problemboNegativePrompt || '')}</textarea>
+                </div>
+
+                <div class="flex-row" style="margin-top: 8px;">
+                    <label for="iig_problembo_style">${t`Style ID`}</label>
+                    <input type="text" id="iig_problembo_style" class="text_pole flex1" value="${sanitizeForHtml(settings.problemboStyle || '')}" placeholder="${t`Optional; model-specific`}">
+                    <div></div>
+                </div>
+
+                <div class="flex-row">
+                    <label for="iig_problembo_seed">${t`Seed`}</label>
+                    <input type="number" id="iig_problembo_seed" class="text_pole flex1" value="${sanitizeForHtml(settings.problemboSeed || '')}" step="1" placeholder="${t`Optional`}">
+                    <div></div>
+                </div>
+
+                <div class="flex-row">
+                    <label for="iig_problembo_aspect_ratio">${t`Aspect ratio enum`}</label>
+                    <input type="text" id="iig_problembo_aspect_ratio" class="text_pole flex1" value="${sanitizeForHtml(settings.problemboAspectRatio || '')}" placeholder="VERTICAL_16_9">
+                    <div></div>
+                </div>
+
+                <div class="flex-row">
+                    <label for="iig_problembo_resolution">${t`Resolution enum`}</label>
+                    <input type="text" id="iig_problembo_resolution" class="text_pole flex1" value="${sanitizeForHtml(settings.problemboResolution || '')}" placeholder="${t`Optional; copy from Json for API`}">
+                    <div></div>
+                </div>
+
+                <label class="checkbox_label" title="${t`Uploads enabled avatar, NPC, lorebook, wardrobe and context references to Problembo File Store before generation.`}">
+                    <input type="checkbox" id="iig_problembo_enable_references" ${settings.problemboEnableReferences !== false ? 'checked' : ''}>
+                    <span>${t`Enable reference images`}</span>
+                </label>
+                <p class="hint">${t`Aspect ratio, resolution and style are model-specific. Leave them empty to use model defaults, or copy their values from Problembo's “Json for API”. Up to 4 reference images are supported.`}</p>
             </div>
 
             <div class="iig-settings-card-nested ${settings.apiType === 'novelai' ? '' : 'iig-hidden'}" id="iig_novelai_section">
@@ -450,6 +491,12 @@ function applyProfileValuesToInputs(settings) {
     setVal('iig_naistera_aspect_ratio', settings.naisteraAspectRatio);
     setChk('iig_naistera_video_test', settings.naisteraVideoTest);
     setVal('iig_naistera_video_every_n', settings.naisteraVideoEveryN);
+    setVal('iig_problembo_negative_prompt', settings.problemboNegativePrompt);
+    setVal('iig_problembo_style', settings.problemboStyle);
+    setVal('iig_problembo_seed', settings.problemboSeed);
+    setVal('iig_problembo_aspect_ratio', settings.problemboAspectRatio);
+    setVal('iig_problembo_resolution', settings.problemboResolution);
+    setChk('iig_problembo_enable_references', settings.problemboEnableReferences !== false);
     // NovelAI fields
     setVal('iig_novelai_model', settings.novelaiModel);
     setVal('iig_novelai_sampler', settings.novelaiSampler);
@@ -581,6 +628,7 @@ export function bindApiSectionEvents(settings, updateVisibility) {
 
     document.getElementById('iig_api_type')?.addEventListener('change', (e) => {
         const nextApiType = e.target.value;
+        const previousApiType = settings.apiType;
         const endpointInput = document.getElementById('iig_endpoint');
         if (shouldReplaceEndpointForApiType(nextApiType, settings.endpoint)) {
             settings.endpoint = normalizeConfiguredEndpoint(nextApiType, '');
@@ -592,6 +640,11 @@ export function bindApiSectionEvents(settings, updateVisibility) {
             if (endpointInput) {
                 endpointInput.value = settings.endpoint;
             }
+        }
+        if (nextApiType === 'problembo' && previousApiType !== 'problembo') {
+            settings.model = 'waifu-studio-2.6';
+            const modelInput = document.getElementById('iig_model');
+            if (modelInput) modelInput.value = settings.model;
         }
         settings.apiType = nextApiType;
         saveSettings();
@@ -817,6 +870,38 @@ export function bindApiSectionEvents(settings, updateVisibility) {
 
     document.getElementById('iig_electronhub_enable_references')?.addEventListener('change', (e) => {
         settings.electronhubEnableReferences = e.target.checked;
+        saveSettings();
+        updateVisibility();
+    });
+
+    // Problembo specific parameters
+    document.getElementById('iig_problembo_negative_prompt')?.addEventListener('input', (e) => {
+        settings.problemboNegativePrompt = e.target.value;
+        saveSettings();
+    });
+
+    document.getElementById('iig_problembo_style')?.addEventListener('input', (e) => {
+        settings.problemboStyle = e.target.value;
+        saveSettings();
+    });
+
+    document.getElementById('iig_problembo_seed')?.addEventListener('input', (e) => {
+        settings.problemboSeed = e.target.value;
+        saveSettings();
+    });
+
+    document.getElementById('iig_problembo_aspect_ratio')?.addEventListener('input', (e) => {
+        settings.problemboAspectRatio = e.target.value;
+        saveSettings();
+    });
+
+    document.getElementById('iig_problembo_resolution')?.addEventListener('input', (e) => {
+        settings.problemboResolution = e.target.value;
+        saveSettings();
+    });
+
+    document.getElementById('iig_problembo_enable_references')?.addEventListener('change', (e) => {
+        settings.problemboEnableReferences = e.target.checked;
         saveSettings();
         updateVisibility();
     });

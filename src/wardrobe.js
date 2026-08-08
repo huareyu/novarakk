@@ -65,6 +65,7 @@ const swDefaults = Object.freeze({
     sharedUserWardrobe: [], sharedUserActive: null, sharedUserActiveByChat: {}, useSharedUserWardrobe: false,
     sharedUserActiveByPersona: {},
     sharedBotWardrobe:  [], sharedBotActive:  null, sharedBotActiveByChat:  {}, useSharedBotWardrobe:  false,
+    sharedDeletedSourceIds: { bot: [], user: [] },
     maxDimension: 512, showFloatingBtn: false,
     tryOnPrompt: '',
     genLookPrompt: '',
@@ -86,6 +87,11 @@ export function swGetSettings() {
     if (!s.sharedUserActiveByChat || typeof s.sharedUserActiveByChat !== 'object') s.sharedUserActiveByChat = {};
     if (!s.sharedUserActiveByPersona || typeof s.sharedUserActiveByPersona !== 'object') s.sharedUserActiveByPersona = {};
     if (!s.sharedBotActiveByChat || typeof s.sharedBotActiveByChat !== 'object') s.sharedBotActiveByChat = {};
+    if (!s.sharedDeletedSourceIds || typeof s.sharedDeletedSourceIds !== 'object') s.sharedDeletedSourceIds = { bot: [], user: [] };
+    for (const side of ['bot', 'user']) {
+        if (!Array.isArray(s.sharedDeletedSourceIds[side])) s.sharedDeletedSourceIds[side] = [];
+        s.sharedDeletedSourceIds[side] = [...new Set(s.sharedDeletedSourceIds[side].map(String).filter(Boolean))];
+    }
     if (!Array.isArray(s.outfitTypes) || !s.outfitTypes.length) {
         s.outfitTypes = structuredClone(SW_DEFAULT_TYPES);
         swMigrateTypeId(s, 'underwear', 'work');
@@ -325,26 +331,46 @@ function swGetSharedActiveId(side) {
     if (side === 'user') {
         const s = swGetSettings();
         const key = swPersonaKey();
-        if (Object.hasOwn(s.sharedUserActiveByPersona, key)) return s.sharedUserActiveByPersona[key] || null;
-        const legacyChatId = swCurrentChatId();
-        if (legacyChatId && Object.hasOwn(cfg.byChat(), legacyChatId)) {
-            const legacyId = cfg.byChat()[legacyChatId] || null;
-            if (legacyId) s.sharedUserActiveByPersona[key] = legacyId;
+        if (Object.hasOwn(s.sharedUserActiveByPersona, key)) {
+            const savedId = s.sharedUserActiveByPersona[key] || null;
+            if (!savedId || cfg.list().some(item => item?.id === savedId)) return savedId;
+            s.sharedUserActiveByPersona[key] = null;
             swSave();
-            return legacyId;
+            return null;
         }
-        return cfg.global();
+        const legacyChatId = swCurrentChatId();
+        let legacyId = null;
+        if (legacyChatId && Object.hasOwn(cfg.byChat(), legacyChatId)) {
+            legacyId = cfg.byChat()[legacyChatId] || null;
+        } else {
+            legacyId = cfg.global();
+        }
+        if (legacyId && !cfg.list().some(item => item?.id === legacyId)) legacyId = null;
+        s.sharedUserActiveByPersona[key] = legacyId;
+        swSave();
+        return legacyId;
     }
     const cid = swCurrentChatId();
-    if (cid) { const m = cfg.byChat(); return Object.hasOwn(m, cid) ? m[cid] : null; }
-    return cfg.global();
+    if (cid) {
+        const map = cfg.byChat();
+        const savedId = Object.hasOwn(map, cid) ? (map[cid] || null) : null;
+        if (!savedId || cfg.list().some(item => item?.id === savedId)) return savedId;
+        map[cid] = null;
+        swSave();
+        return null;
+    }
+    const globalId = cfg.global();
+    if (!globalId || cfg.list().some(item => item?.id === globalId)) return globalId;
+    cfg.setGlobal(null);
+    swSave();
+    return null;
 }
 function swSetSharedActiveId(side, id) {
     const cfg = swSharedCfg(side);
     if (side === 'user') {
         const map = swGetSettings().sharedUserActiveByPersona;
         const key = swPersonaKey();
-        if (id == null) delete map[key]; else map[key] = id;
+        map[key] = id || null;
         swSave();
         return;
     }
@@ -377,12 +403,17 @@ function swCurrentView() {
             find: (id) => cfg.list().find(o => o.id === id) || null,
             add: (o) => { cfg.list().push(o); swSave(); },
             remove: (id) => {
+                const removed = cfg.list().find(o => o.id === id) || null;
                 cfg.setList(cfg.list().filter(o => o.id !== id));
                 if (cfg.global() === id) cfg.setGlobal(null);
-                const m = cfg.byChat(); for (const key of Object.keys(m)) if (m[key] === id) delete m[key];
+                const m = cfg.byChat(); for (const key of Object.keys(m)) if (m[key] === id) m[key] = null;
                 if (swTab === 'user') {
                     const byPersona = swGetSettings().sharedUserActiveByPersona;
-                    for (const key of Object.keys(byPersona)) if (byPersona[key] === id) delete byPersona[key];
+                    for (const key of Object.keys(byPersona)) if (byPersona[key] === id) byPersona[key] = null;
+                }
+                if (removed?.srcId) {
+                    const deleted = swGetSettings().sharedDeletedSourceIds[swTab];
+                    if (!deleted.includes(String(removed.srcId))) deleted.push(String(removed.srcId));
                 }
                 swSave();
             },
@@ -452,8 +483,9 @@ function swCollectPendingOutfits(side) {
     const s = swGetSettings();
     const out = [];
     const seen = new Set();
+    const deleted = new Set(s.sharedDeletedSourceIds?.[side] || []);
     const collect = (o) => {
-        if (!o?.id || seen.has(o.id) || (!o.base64 && !o.imagePath) || swSharedHasSrc(side, o.id)) return;
+        if (!o?.id || deleted.has(String(o.id)) || seen.has(o.id) || (!o.base64 && !o.imagePath) || swSharedHasSrc(side, o.id)) return;
         out.push(o);
         seen.add(o.id);
     };
@@ -517,9 +549,8 @@ async function swMigrateToSharedUnlocked(side, { silent = false } = {}) {
     }
 
     swSave();
-    const worn = swAutoWearSharedFromCurrent(side, { force: true });
     await swPreloadSharedActive(side);
-    if (!silent) toastr.success(`Добавлено: ${done}${failed ? `, не удалось: ${failed}` : ''}.${worn ? ` Надет «${worn}».` : ''} Оригиналы сохранены.`, 'Гардероб', { timeOut: 5000 });
+    if (!silent) toastr.success(`Добавлено: ${done}${failed ? `, не удалось: ${failed}` : ''}. Оригиналы сохранены.`, 'Гардероб', { timeOut: 5000 });
     if (silent && failed) iigLog('WARN', `Automatic shared wardrobe sync: ${done} added, ${failed} failed`);
     return done;
 }
@@ -532,21 +563,6 @@ async function swMigrateToShared(side, options = {}) {
     finally { swSharedSyncPromises[side] = null; }
 }
 
-function swAutoSyncShared(side) {
-    swMigrateToShared(side, { silent: true }).then((added) => {
-        if (added && swOpen && swTab === side) swRender();
-    }).catch((error) => iigLog('WARN', `Automatic shared wardrobe sync (${side}) failed:`, error.message));
-}
-function swAutoWearSharedFromCurrent(side, { force = false } = {}) {
-    const wornId = swGetPersonalActiveId(side);
-    if (!wornId) return null;
-    if (!force && swGetSharedActiveId(side)) return null;
-    const copy = swSharedCfg(side).list().find(x => x.srcId === wornId);
-    if (!copy) return null;
-    swSetSharedActiveId(side, copy.id);
-    swPreloadSharedActive(side);
-    return copy.name || 'образ';
-}
 
 async function swSaveRefImageToFile(base64, label) {
     const ctx = SillyTavern.getContext();
@@ -944,11 +960,9 @@ export function swOpenModal() {
     for (const t of m.querySelectorAll('.sw-tab')) t.addEventListener('click', () => {
         swTab = t.dataset.tab; swFilter = 'all'; swPage = 0;
         m.querySelectorAll('.sw-tab').forEach(x => x.classList.toggle('sw-tab-active', x.dataset.tab === swTab)); swRender();
-        swAutoSyncShared(swTab);
     });
     swFilter = 'all'; swPage = 0;
     swRender();
-    swAutoSyncShared(swTab);
     document.addEventListener('keydown', swEsc);
 }
 
@@ -1068,7 +1082,6 @@ function swRender() {
                 : 'гардероб текущего персонажа';
             toastr.info(`${sideName}: ${wantShared ? 'общий гардероб (для всех персонажей)' : personalMode}`, 'Гардероб', { timeOut: 2000 });
             if (wantShared) {
-                swAutoWearSharedFromCurrent(swTab, { force: false });
                 swPage = 0; swRender(); swUpdatePromptInjection(); swInjectBarBtn();
             }
         });

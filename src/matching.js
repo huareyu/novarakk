@@ -1,6 +1,7 @@
 /**
  * Shared literal keyword matching for lorebook references and NPCs.
- * Comma-separated values are OR aliases; a hit on any alias is enough.
+ * Commas are the canonical separator. Semicolons, line breaks and sentence-like
+ * dots are accepted too, so a small typo in an alias list does not disable refs.
  */
 
 function escapePattern(value) {
@@ -17,7 +18,10 @@ export function normalizeMatchText(value) {
 
 export function splitMatchKeywords(value) {
     const values = Array.isArray(value) ? value : [value];
-    const source = values.flatMap((item) => String(item || '').split(','));
+    const source = values.flatMap((item) => String(item || '')
+        .replace(/[;\r\n]+/g, ',')
+        .replace(/(\p{L}{3,})\.\s+(?=\p{Lu})/gu, '$1,')
+        .split(','));
     const seen = new Set();
     const result = [];
 

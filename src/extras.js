@@ -27,6 +27,14 @@ import {
     isActiveOutfitTryOn,
 } from './wardrobe.js';
 import { findFirstMatchKeyword } from './matching.js';
+import {
+    collectCharacterLibraryReferences,
+    getReferenceImage,
+    shouldSendCharacterLibraryReference,
+    activeCharacterLibraryEntryMatchesPrompt,
+    activeCharacterLibraryEntryMatchesPromptAsync,
+    getActiveCustomCharacterLibraryProfileKey,
+} from './references.js';
 
 // ----- ID generators -----
 
@@ -174,8 +182,41 @@ export { swUpdatePromptInjection as updateWardrobeInjection };
 
 export async function getWardrobeAvatarOverrideBase64(side) {
     const normalized = side === 'bot' ? 'bot' : 'user';
+    const libraryKind = normalized === 'bot' ? 'char' : 'user';
+    if (getActiveCustomCharacterLibraryProfileKey(libraryKind, getSettings())) return null;
     if (!isActiveOutfitTryOn(normalized)) return null;
     return await getActiveOutfitBase64(normalized);
+}
+
+/**
+ * Avatar references for providers. A worn try-on remains the highest-priority
+ * temporary avatar; otherwise every enabled image from the master character
+ * library is returned in its provider-specific format.
+ */
+export async function collectAvatarReferences(side, format = 'base64', prompt = '') {
+    const normalized = side === 'bot' ? 'bot' : 'user';
+    const kind = normalized === 'bot' ? 'char' : 'user';
+    const settings = getSettings();
+    if (!await shouldSendCharacterLibraryReference(kind, prompt, settings)) return [];
+    const override = await getWardrobeAvatarOverrideBase64(normalized);
+    if (override) {
+        return [format === 'dataUrl' ? `data:image/png;base64,${override}` : override];
+    }
+    const refs = await collectCharacterLibraryReferences(kind, format, settings);
+    return refs.map(getReferenceImage).filter(Boolean);
+}
+
+export function mergeAvatarReferenceGroups(groups, maxCount = Number.POSITIVE_INFINITY) {
+    const normalized = groups.filter(Array.isArray);
+    const merged = [];
+    const append = (value) => {
+        if (value && merged.length < maxCount) merged.push(value);
+    };
+    // Preserve the main reference for every enabled participant first.
+    for (const group of normalized) append(group[0]);
+    // Then append their extra appearances in stable group order.
+    for (const group of normalized) for (const value of group.slice(1)) append(value);
+    return merged;
 }
 
 // ============================================================
@@ -347,15 +388,27 @@ export async function collectExtraReferenceObjects(prompt, format = 'base64') {
     }
 
     // Wardrobe v4: send active outfit images as references
-    if (settings.swSendOutfitImageBot !== false) {
+    const [botOutfitAllowed, userOutfitAllowed] = settings.optionalWardrobeSending !== true
+        ? [true, true]
+        : await Promise.all([
+            activeCharacterLibraryEntryMatchesPromptAsync('char', prompt, settings),
+            activeCharacterLibraryEntryMatchesPromptAsync('user', prompt, settings),
+        ]);
+    if (settings.optionalWardrobeSending === true) {
+        iigLog('INFO', `Wardrobe alias match: character=${botOutfitAllowed}, persona=${userOutfitAllowed}`);
+    }
+
+    if (settings.swSendOutfitImageBot !== false && botOutfitAllowed) {
         const botTryOnUsedAsAvatar = isActiveOutfitTryOn('bot')
-            && (settings.apiType === 'naistera' ? settings.naisteraSendCharAvatar : settings.sendCharAvatar);
+            && (settings.apiType === 'naistera' ? settings.naisteraSendCharAvatar : settings.sendCharAvatar)
+            && await shouldSendCharacterLibraryReference('char', prompt, settings);
         const botImg = botTryOnUsedAsAvatar ? null : (await getActiveOutfitBase64('bot') || await getCollageBase64('bot'));
         if (botImg) refs.push({ image: wrap(botImg), kind: 'outfit-char', name: '' });
     }
-    if (settings.swSendOutfitImageUser !== false) {
+    if (settings.swSendOutfitImageUser !== false && userOutfitAllowed) {
         const userTryOnUsedAsAvatar = isActiveOutfitTryOn('user')
-            && (settings.apiType === 'naistera' ? settings.naisteraSendUserAvatar : settings.sendUserAvatar);
+            && (settings.apiType === 'naistera' ? settings.naisteraSendUserAvatar : settings.sendUserAvatar)
+            && await shouldSendCharacterLibraryReference('user', prompt, settings);
         const userImg = userTryOnUsedAsAvatar ? null : (await getActiveOutfitBase64('user') || await getCollageBase64('user'));
         if (userImg) refs.push({ image: wrap(userImg), kind: 'outfit-user', name: '' });
     }
@@ -398,11 +451,15 @@ export function buildExtraPromptBlocks(prompt) {
     // Wardrobe v4: add outfit descriptions
     const charName = context.characters?.[context.characterId]?.name || 'Character';
     const userName = context.name1 || 'User';
-    const botDesc = getActiveOutfitDescription('bot');
+    const botOutfitAllowed = settings.optionalWardrobeSending !== true
+        || activeCharacterLibraryEntryMatchesPrompt('char', prompt, settings);
+    const userOutfitAllowed = settings.optionalWardrobeSending !== true
+        || activeCharacterLibraryEntryMatchesPrompt('user', prompt, settings);
+    const botDesc = botOutfitAllowed ? getActiveOutfitDescription('bot') : '';
     if (botDesc) {
         blocks.push(`[OUTFIT LOCK — keep unchanged: ${charName} is currently wearing: ${botDesc}. Always use this exact outfit when writing image prompts for ${charName}.]`);
     }
-    const userDesc = getActiveOutfitDescription('user');
+    const userDesc = userOutfitAllowed ? getActiveOutfitDescription('user') : '';
     if (userDesc) {
         blocks.push(`[OUTFIT LOCK — keep unchanged: ${userName} is currently wearing: ${userDesc}. Always use this exact outfit when writing image prompts for ${userName}.]`);
     }

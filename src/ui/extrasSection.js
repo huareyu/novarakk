@@ -586,6 +586,12 @@ export function bindExtrasEvents(settings) {
         swInjectBarBtn();
     });
 
+    document.getElementById('iig_optional_wardrobe_sending')?.addEventListener('change', (e) => {
+        if (!(e.target instanceof HTMLInputElement)) return;
+        settings.optionalWardrobeSending = e.target.checked;
+        saveSettings();
+    });
+
     document.getElementById('iig_open_wardrobe_modal')?.addEventListener('click', () => {
         swOpenModal();
     });

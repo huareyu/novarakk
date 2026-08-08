@@ -26,7 +26,7 @@ import {
     getUserAvatarDataUrl,
     collectPreviousContextReferences,
 } from '../references.js';
-import { collectExtraReferences, getWardrobeAvatarOverrideBase64 } from '../extras.js';
+import { collectAvatarReferences, collectExtraReferences, mergeAvatarReferenceGroups } from '../extras.js';
 import { Provider } from './base.js';
 
 const DEFAULT_MODEL = 'waifu-studio-2.6';
@@ -216,20 +216,10 @@ export class ProblemboProvider extends Provider {
         if (!this.supportsReferences(settings)) return [];
 
         const refs = [];
-        if (settings.sendCharAvatar) {
-            const override = await getWardrobeAvatarOverrideBase64('bot');
-            const dataUrl = override
-                ? `data:image/png;base64,${override}`
-                : await getCharacterAvatarDataUrl();
-            if (dataUrl) refs.push(dataUrl);
-        }
-        if (settings.sendUserAvatar) {
-            const override = await getWardrobeAvatarOverrideBase64('user');
-            const dataUrl = override
-                ? `data:image/png;base64,${override}`
-                : await getUserAvatarDataUrl();
-            if (dataUrl) refs.push(dataUrl);
-        }
+        const avatarGroups = [];
+        if (settings.sendCharAvatar) avatarGroups.push(await collectAvatarReferences('bot', 'dataUrl', prompt));
+        if (settings.sendUserAvatar) avatarGroups.push(await collectAvatarReferences('user', 'dataUrl', prompt));
+        refs.push(...mergeAvatarReferenceGroups(avatarGroups, MAX_PROBLEMBO_REFERENCES));
 
         for (const extra of await collectExtraReferences(prompt, 'dataUrl')) {
             if (refs.length >= MAX_PROBLEMBO_REFERENCES) break;

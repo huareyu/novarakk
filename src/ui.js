@@ -54,6 +54,7 @@ import {
     bindExtrasEvents,
     bindVisionCollapse,
 } from './ui/extrasSection.js';
+import { bindCharacterLibraryEvents } from './characterLibraryUi.js';
 
 export { renderStyleSettings };
 
@@ -265,6 +266,7 @@ export function createSettingsUI() {
 
     bindSettingsEvents();
     bindExtrasEvents(settings);
+    bindCharacterLibraryEvents(settings);
     bindReferencesTabs();
     bindVisionCollapse();
     renderStyleSettings();

@@ -27,7 +27,7 @@ import {
     getUserAvatarDataUrl,
     collectPreviousContextReferences,
 } from '../references.js';
-import { collectExtraReferences, getWardrobeAvatarOverrideBase64 } from '../extras.js';
+import { collectAvatarReferences, collectExtraReferences, mergeAvatarReferenceGroups } from '../extras.js';
 import { Provider, resolveLockedSetting } from './base.js';
 
 export class NaisteraProvider extends Provider {
@@ -66,16 +66,10 @@ export class NaisteraProvider extends Provider {
 
         const refs = [];
 
-        if (settings.naisteraSendCharAvatar) {
-            const override = await getWardrobeAvatarOverrideBase64('bot');
-            const d = override ? `data:image/png;base64,${override}` : await getCharacterAvatarDataUrl();
-            if (d) refs.push(d);
-        }
-        if (settings.naisteraSendUserAvatar) {
-            const override = await getWardrobeAvatarOverrideBase64('user');
-            const d = override ? `data:image/png;base64,${override}` : await getUserAvatarDataUrl();
-            if (d) refs.push(d);
-        }
+        const avatarGroups = [];
+        if (settings.naisteraSendCharAvatar) avatarGroups.push(await collectAvatarReferences('bot', 'dataUrl', prompt));
+        if (settings.naisteraSendUserAvatar) avatarGroups.push(await collectAvatarReferences('user', 'dataUrl', prompt));
+        refs.push(...mergeAvatarReferenceGroups(avatarGroups, MAX_GENERATION_REFERENCE_IMAGES));
 
         for (const extra of await collectExtraReferences(prompt, 'dataUrl')) {
             if (refs.length >= MAX_GENERATION_REFERENCE_IMAGES) break;

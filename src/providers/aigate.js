@@ -29,7 +29,7 @@ import {
     getUserAvatarDataUrl,
     collectPreviousContextReferences,
 } from '../references.js';
-import { collectExtraReferences, getWardrobeAvatarOverrideBase64 } from '../extras.js';
+import { collectAvatarReferences, collectExtraReferences, mergeAvatarReferenceGroups } from '../extras.js';
 import {
     Provider,
     buildGenerationUrl,
@@ -110,19 +110,10 @@ export class AIGateProvider extends Provider {
 
         const refs = [];
         const toImg = format === 'dataUrl' ? imageUrlToDataUrl : imageUrlToBase64;
-        const getChar = format === 'dataUrl' ? getCharacterAvatarDataUrl : getCharacterAvatarBase64;
-        const getUser = format === 'dataUrl' ? getUserAvatarDataUrl : getUserAvatarBase64;
-
-        if (settings.sendCharAvatar) {
-            const override = await getWardrobeAvatarOverrideBase64('bot');
-            const d = override ? (format === 'dataUrl' ? `data:image/png;base64,${override}` : override) : await getChar();
-            if (d) refs.push(d);
-        }
-        if (settings.sendUserAvatar) {
-            const override = await getWardrobeAvatarOverrideBase64('user');
-            const d = override ? (format === 'dataUrl' ? `data:image/png;base64,${override}` : override) : await getUser();
-            if (d) refs.push(d);
-        }
+        const avatarGroups = [];
+        if (settings.sendCharAvatar) avatarGroups.push(await collectAvatarReferences('bot', format, prompt));
+        if (settings.sendUserAvatar) avatarGroups.push(await collectAvatarReferences('user', format, prompt));
+        refs.push(...mergeAvatarReferenceGroups(avatarGroups, maxRefs));
 
         for (const extra of await collectExtraReferences(prompt, format)) {
             if (refs.length >= maxRefs) break;

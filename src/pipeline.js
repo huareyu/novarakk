@@ -43,7 +43,7 @@ import {
     resolveActiveProvider,
     validateSettings,
 } from './providers.js';
-import { getReferenceDescription, getReferenceImage, getReferenceSource } from './references.js';
+import { buildActiveCharacterLibraryPromptBlock, getReferenceDescription, getReferenceImage, getReferenceSource, recordCharacterGeneration } from './references.js';
 import { t } from './i18n.js';
 
 // ----- Friendly error classification -----
@@ -460,8 +460,12 @@ export async function generateImageWithRetry(prompt, style, onStatusUpdate, opti
                 : t`Generating...`;
             onStatusUpdate?.(statusText);
 
+            const libraryPromptBlock = settings.apiType === 'gemini'
+                ? ''
+                : await buildActiveCharacterLibraryPromptBlock(settings, prompt);
+            const requestPrompt = libraryPromptBlock ? `${prompt}\n\n${libraryPromptBlock}` : prompt;
             const generated = await provider.generate({
-                prompt,
+                prompt: requestPrompt,
                 style,
                 references,
                 options: {
@@ -693,12 +697,12 @@ export async function processMessageTags(messageId) {
             );
             finishLoadingGeneration(loadingPlaceholder);
             clearLoadingPlaceholderTimer(loadingPlaceholder);
-
             const { persistedSrc, persistedPosterSrc } = await persistGeneratedMedia(
                 generated,
                 statusEl,
                 { messageId, tagIndex: index, mode: 'generate' }
             );
+            if (!isGeneratedVideoResult(generated)) recordCharacterGeneration(persistedSrc, tag.prompt, getSettings());
 
             const mediaElement = createGeneratedMediaElement(
                 isGeneratedVideoResult(generated)
@@ -882,12 +886,12 @@ export async function regenerateSingleTag(messageId, tagIndex, instructionValue 
         );
         finishLoadingGeneration(loadingPlaceholder);
         clearLoadingPlaceholderTimer(loadingPlaceholder);
-
         const { persistedSrc, persistedPosterSrc } = await persistGeneratedMedia(
             generated,
             statusEl,
             { messageId, tagIndex: sourceTagIndex, mode: 'regenerate' }
         );
+        if (!isGeneratedVideoResult(generated)) recordCharacterGeneration(persistedSrc, tag.prompt, getSettings());
 
         const mediaElement = createGeneratedMediaElement(
             isGeneratedVideoResult(generated)
@@ -1006,12 +1010,12 @@ export async function regenerateMessageImages(messageId) {
                     );
                     finishLoadingGeneration(loadingPlaceholder);
                     clearLoadingPlaceholderTimer(loadingPlaceholder);
-
                     const { persistedSrc, persistedPosterSrc } = await persistGeneratedMedia(
                         generated,
                         statusEl,
                         { messageId, tagIndex: index, mode: 'regenerate' }
                     );
+                    if (!isGeneratedVideoResult(generated)) recordCharacterGeneration(persistedSrc, tag.prompt, getSettings());
 
                     const mediaElement = createGeneratedMediaElement(
                         isGeneratedVideoResult(generated)

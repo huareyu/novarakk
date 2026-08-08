@@ -26,8 +26,11 @@ import {
     getReferenceImage,
     getReferenceDescription,
     getReferenceSource,
+    collectCharacterLibraryReferences,
+    getEffectiveCharacterLibraryDisplayName,
+    shouldSendCharacterLibraryReference,
 } from '../references.js';
-import { collectExtraReferenceObjects, getActiveAvatarItem, getWardrobeAvatarOverrideBase64 } from '../extras.js';
+import { collectExtraReferenceObjects, getWardrobeAvatarOverrideBase64, mergeAvatarReferenceGroups } from '../extras.js';
 import {
     Provider,
     buildGenerationUrl,
@@ -109,35 +112,36 @@ export class GeminiProvider extends Provider {
         const context = SillyTavern.getContext();
         const caps = getGeminiCapabilities(settings.model);
         const maxRefs = caps.maxReferences;
-        const charName = context.characters?.[context.characterId]?.name || 'the character';
-        const userName = context.name1 || 'the user';
+        const charName = await getEffectiveCharacterLibraryDisplayName(
+            'char',
+            context.characters?.[context.characterId]?.name || 'the character',
+            settings,
+        );
+        const userName = await getEffectiveCharacterLibraryDisplayName('user', context.name1 || 'the user', settings);
         const refs = [];
 
-        // Текстовый якорь внешности: модель следует тексту надёжно, а
-        // image-only признакам (цвет волос, лицо) — нестабильно. Если у
-        // активного аватара в Avatar Library заполнено `appearance`,
-        // вшиваем его в подпись референса безусловно.
-        const appearanceAnchor = (target) => {
-            try {
-                const appearance = String(getActiveAvatarItem(target, settings)?.appearance || '').trim().replace(/\.+$/, '');
-                return appearance ? `. ${target === 'char' ? charName : userName} looks like: ${appearance}` : '';
-            } catch (_e) {
-                return '';
-            }
-        };
-
-        if (settings.sendCharAvatar) {
-            const charAvatar = await getWardrobeAvatarOverrideBase64('bot') || await getCharacterAvatarBase64();
-            if (charAvatar) {
-                refs.push(makeReferenceObject(charAvatar, `is ${charName}'s FACE and appearance — preserve this face exactly${appearanceAnchor('char')}`, 'char-avatar'));
-            }
+        const avatarGroups = [];
+        if (settings.sendCharAvatar && await shouldSendCharacterLibraryReference('char', prompt, settings)) {
+            const override = await getWardrobeAvatarOverrideBase64('bot');
+            const libraryRefs = override
+                ? [makeReferenceObject(override, '', 'char')]
+                : await collectCharacterLibraryReferences('char', 'base64', settings);
+            avatarGroups.push(libraryRefs.map((ref) => {
+                const description = [`is ${charName}'s FACE and appearance — preserve this identity exactly`, getReferenceDescription(ref)].filter(Boolean).join('. ');
+                return makeReferenceObject(getReferenceImage(ref), description, 'char-avatar');
+            }));
         }
-        if (settings.sendUserAvatar) {
-            const userAvatar = await getWardrobeAvatarOverrideBase64('user') || await getUserAvatarBase64();
-            if (userAvatar) {
-                refs.push(makeReferenceObject(userAvatar, `is ${userName}'s FACE and appearance — preserve this face exactly${appearanceAnchor('user')}`, 'user-avatar'));
-            }
+        if (settings.sendUserAvatar && await shouldSendCharacterLibraryReference('user', prompt, settings)) {
+            const override = await getWardrobeAvatarOverrideBase64('user');
+            const libraryRefs = override
+                ? [makeReferenceObject(override, '', 'user')]
+                : await collectCharacterLibraryReferences('user', 'base64', settings);
+            avatarGroups.push(libraryRefs.map((ref) => {
+                const description = [`is ${userName}'s FACE and appearance — preserve this identity exactly`, getReferenceDescription(ref)].filter(Boolean).join('. ');
+                return makeReferenceObject(getReferenceImage(ref), description, 'user-avatar');
+            }));
         }
+        refs.push(...mergeAvatarReferenceGroups(avatarGroups, maxRefs));
 
         for (const extra of await collectExtraReferenceObjects(prompt, 'base64')) {
             if (refs.length >= maxRefs) break;

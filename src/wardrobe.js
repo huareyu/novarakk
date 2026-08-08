@@ -19,6 +19,7 @@ import {
 import {
     imageUrlToDataUrl,
     convertDataUrlToPng,
+    downloadImageSrc,
     parseImageDataUrl,
 } from './utils.js';
 import { callVisionApi, DEFAULT_VISION_PROMPT } from './vision.js';
@@ -656,6 +657,163 @@ function swBuildTryOnPrompt(side, outfitDesc, { fromDescription = false } = {}) 
         .replace(/[ \t]{2,}/g, ' ')
         .trim();
 }
+
+function swCropGeneratedImage(base64) {
+    return new Promise((resolve) => {
+        document.getElementById('sw-crop-overlay')?.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'sw-crop-overlay';
+        overlay.innerHTML = `
+            <div id="sw-crop-panel" role="dialog" aria-modal="true" aria-label="Кадрирование изображения">
+                <div class="sw-crop-header"><strong><i class="fa-solid fa-crop-simple"></i> Кадрирование</strong><button type="button" class="sw-crop-close" title="Закрыть"><i class="fa-solid fa-xmark"></i></button></div>
+                <div class="sw-crop-stage"><div class="sw-crop-image-wrap"><img alt="Кадрируемое изображение"><div class="sw-crop-shade"></div><div class="sw-crop-box"><i data-handle="nw"></i><i data-handle="ne"></i><i data-handle="sw"></i><i data-handle="se"></i></div></div></div>
+                <div class="sw-crop-ratios" aria-label="Формат кадра">
+                    <button type="button" data-ratio="free" class="selected">Свободно</button>
+                    <button type="button" data-ratio="1">1:1</button>
+                    <button type="button" data-ratio="0.6666667">2:3</button>
+                    <button type="button" data-ratio="0.75">3:4</button>
+                    <button type="button" data-ratio="1.7777778">16:9</button>
+                </div>
+                <div class="sw-crop-actions"><button type="button" class="sw-crop-cancel">Отмена</button><button type="button" class="sw-crop-apply"><i class="fa-solid fa-check"></i> Применить</button></div>
+            </div>`;
+        document.body.appendChild(overlay);
+
+        const image = overlay.querySelector('.sw-crop-image-wrap img');
+        const box = overlay.querySelector('.sw-crop-box');
+        let state = { x: 0, y: 0, w: 0, h: 0 };
+        let lastSize = null;
+        let finished = false;
+
+        const size = () => ({ w: image.clientWidth, h: image.clientHeight });
+        const draw = () => {
+            box.style.left = `${state.x}px`;
+            box.style.top = `${state.y}px`;
+            box.style.width = `${state.w}px`;
+            box.style.height = `${state.h}px`;
+        };
+        const initSelection = () => {
+            const current = size();
+            if (!current.w || !current.h) return;
+            state = { x: current.w * 0.05, y: current.h * 0.05, w: current.w * 0.9, h: current.h * 0.9 };
+            lastSize = current;
+            draw();
+        };
+        const fitRatio = (ratio) => {
+            const current = size();
+            if (!current.w || !current.h || !Number.isFinite(ratio) || ratio <= 0) return;
+            let w = current.w * 0.9;
+            let h = w / ratio;
+            if (h > current.h * 0.9) { h = current.h * 0.9; w = h * ratio; }
+            state = { x: (current.w - w) / 2, y: (current.h - h) / 2, w, h };
+            draw();
+        };
+        const finish = (value) => {
+            if (finished) return;
+            finished = true;
+            resizeObserver?.disconnect();
+            document.removeEventListener('keydown', onKeyDown, true);
+            overlay.remove();
+            resolve(value);
+        };
+        overlay._swCropCancel = () => finish(null);
+        const onKeyDown = (event) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault(); event.stopImmediatePropagation();
+            finish(null);
+        };
+        document.addEventListener('keydown', onKeyDown, true);
+        overlay.addEventListener('click', (event) => { if (event.target === overlay) finish(null); });
+        overlay.querySelector('.sw-crop-close').addEventListener('click', () => finish(null));
+        overlay.querySelector('.sw-crop-cancel').addEventListener('click', () => finish(null));
+
+        for (const button of overlay.querySelectorAll('.sw-crop-ratios button')) {
+            button.addEventListener('click', () => {
+                overlay.querySelectorAll('.sw-crop-ratios button').forEach((item) => item.classList.toggle('selected', item === button));
+                const ratio = Number(button.dataset.ratio);
+                if (Number.isFinite(ratio)) fitRatio(ratio);
+            });
+        }
+
+        box.addEventListener('pointerdown', (event) => {
+            event.preventDefault(); event.stopPropagation();
+            const handle = event.target?.dataset?.handle || 'move';
+            const start = {
+                pointerX: event.clientX,
+                pointerY: event.clientY,
+                boxX: state.x,
+                boxY: state.y,
+                boxW: state.w,
+                boxH: state.h,
+            };
+            const minSize = 36;
+            box.setPointerCapture?.(event.pointerId);
+            const move = (nextEvent) => {
+                const bounds = size();
+                const dx = nextEvent.clientX - start.pointerX;
+                const dy = nextEvent.clientY - start.pointerY;
+                if (handle === 'move') {
+                    state.x = Math.max(0, Math.min(bounds.w - start.boxW, start.boxX + dx));
+                    state.y = Math.max(0, Math.min(bounds.h - start.boxH, start.boxY + dy));
+                } else {
+                    let left = start.boxX;
+                    let top = start.boxY;
+                    let right = start.boxX + start.boxW;
+                    let bottom = start.boxY + start.boxH;
+                    if (handle.includes('w')) left = Math.max(0, Math.min(right - minSize, start.boxX + dx));
+                    if (handle.includes('e')) right = Math.min(bounds.w, Math.max(left + minSize, start.boxX + start.boxW + dx));
+                    if (handle.includes('n')) top = Math.max(0, Math.min(bottom - minSize, start.boxY + dy));
+                    if (handle.includes('s')) bottom = Math.min(bounds.h, Math.max(top + minSize, start.boxY + start.boxH + dy));
+                    state = { x: left, y: top, w: right - left, h: bottom - top };
+                }
+                draw();
+            };
+            const up = () => {
+                box.removeEventListener('pointermove', move);
+                box.removeEventListener('pointerup', up);
+                box.removeEventListener('pointercancel', up);
+            };
+            box.addEventListener('pointermove', move);
+            box.addEventListener('pointerup', up);
+            box.addEventListener('pointercancel', up);
+        });
+
+        overlay.querySelector('.sw-crop-apply').addEventListener('click', () => {
+            const current = size();
+            if (!current.w || !current.h || state.w < 2 || state.h < 2) return;
+            const scaleX = image.naturalWidth / current.w;
+            const scaleY = image.naturalHeight / current.h;
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(state.w * scaleX));
+            canvas.height = Math.max(1, Math.round(state.h * scaleY));
+            canvas.getContext('2d').drawImage(
+                image,
+                Math.round(state.x * scaleX), Math.round(state.y * scaleY),
+                Math.round(state.w * scaleX), Math.round(state.h * scaleY),
+                0, 0, canvas.width, canvas.height,
+            );
+            finish(canvas.toDataURL('image/png').split(',')[1]);
+        });
+
+        const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
+            const current = size();
+            if (!current.w || !current.h) return;
+            if (!lastSize) { initSelection(); return; }
+            state = {
+                x: state.x * current.w / lastSize.w,
+                y: state.y * current.h / lastSize.h,
+                w: state.w * current.w / lastSize.w,
+                h: state.h * current.h / lastSize.h,
+            };
+            lastSize = current;
+            draw();
+        }) : null;
+        image.addEventListener('load', () => {
+            initSelection();
+            resizeObserver?.observe(image);
+        }, { once: true });
+        image.src = `data:image/png;base64,${base64}`;
+    });
+}
 async function swTryOnGenerate(side, outfitB64, outfitDesc) {
     const prompt = swBuildTryOnPrompt(side, outfitDesc, { fromDescription: !outfitB64 });
     return swGenerateWardrobeImage(side, outfitB64 ? [outfitB64] : [], prompt);
@@ -999,7 +1157,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
     const isGeneratedMode = isGen || isBuild;
     const buildSlots = isBuild ? SW_DEFAULT_BUILD_SLOTS.map(label => ({ id: uid(), label, base64: null, fileName: '' })) : [];
     const curType = isEdit ? swTypeOf(item) : (swTypeIds().includes(swFilter) ? swFilter : 'other');
-    const previewSrc = isEdit ? swImgSrc(item) : (base64 ? 'data:image/png;base64,' + base64 : '');
+    let previewSrc = isEdit ? swImgSrc(item) : (base64 ? 'data:image/png;base64,' + base64 : '');
     const curName = isEdit ? (item.name || '') : (defaultName || '');
     const curDesc = isEdit ? swSanitizeDesc(item.description) : '';
 
@@ -1016,6 +1174,10 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         <div class="sw-form-body">
             ${isBuild ? '<div class="sw-build-intro">Добавьте референсы деталей. Название слота подскажет ИИ, какую роль играет картинка.</div><div class="sw-build-slots" id="sw-build-slots"></div><div class="sw-build-add" id="sw-build-add"><i class="fa-solid fa-plus"></i> Добавить слот</div>' : ''}
             <div class="sw-form-preview"><img src="${esc(previewSrc)}" alt="preview" ${isGeneratedMode ? 'hidden' : ''}>${isGeneratedMode ? `<div class="sw-form-preview-empty" id="sw-gen-empty"><i class="fa-solid ${isBuild ? 'fa-layer-group' : 'fa-wand-magic-sparkles'}"></i><span>${isBuild ? 'Заполните слоты и нажмите «Собрать»' : 'Опишите образ и нажмите «Сгенерировать»'}</span></div>` : ''}</div>
+            <div class="sw-generated-actions" ${previewSrc ? '' : 'hidden'}>
+                <button type="button" id="sw-generated-crop" title="Откадрировать текущую картинку"><i class="fa-solid fa-crop-simple"></i><span>Обрезать</span></button>
+                <button type="button" id="sw-generated-download" title="Сохранить текущую картинку как PNG"><i class="fa-solid fa-download"></i><span>Сохранить изображение</span></button>
+            </div>
             <div class="sw-tryon-row">
                 <select class="text_pole sw-tryon-select" id="sw-tryon-target" title="${isGeneratedMode ? 'Для кого создать образ' : 'На кого примерить наряд'}">
                     <option value="bot" ${view.side === 'bot' ? 'selected' : ''}>На персонажа — ${esc(charNm)}</option>
@@ -1042,8 +1204,14 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         </div>`;
     ov.appendChild(panel); document.body.appendChild(ov);
 
-    function formEsc(e) { if (e.key === 'Escape') { e.stopImmediatePropagation(); close(); } }
-    function close() { document.removeEventListener('keydown', formEsc, true); ov.remove(); }
+    function formEsc(e) { if (e.key === 'Escape' && !document.getElementById('sw-crop-overlay')) { e.stopImmediatePropagation(); close(); } }
+    function close() {
+        document.removeEventListener('keydown', formEsc, true);
+        const cropOverlay = document.getElementById('sw-crop-overlay');
+        if (typeof cropOverlay?._swCropCancel === 'function') cropOverlay._swCropCancel();
+        else cropOverlay?.remove();
+        ov.remove();
+    }
     document.addEventListener('keydown', formEsc, true);
     panel.querySelector('.sw-form-close').addEventListener('click', close);
     panel.querySelector('.sw-form-cancel').addEventListener('click', close);
@@ -1098,6 +1266,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
     }
 
     let origB64 = base64;
+    let origChanged = false;
     async function getFormImageB64() {
         if (origB64) return origB64;
         if (item) origB64 = item.base64 || (item.imagePath ? await swLoadRefImageAsBase64(item.imagePath) : null);
@@ -1127,9 +1296,11 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
     const tryBtn = panel.querySelector('#sw-tryon-btn');
     const tryStatus = panel.querySelector('#sw-tryon-status');
     const tryPick = panel.querySelector('#sw-tryon-pick');
+    const generatedActions = panel.querySelector('.sw-generated-actions');
 
     function refreshTryOnUI() {
         tryPick.hidden = !genB64 || isGeneratedMode;
+        generatedActions.hidden = !(genB64 || previewSrc);
         if (genB64) {
             if (!isGeneratedMode) tryPick.querySelector('[data-pick="orig"] img').src = previewSrc;
             tryPick.querySelector('[data-pick="gen"] img').src = 'data:image/png;base64,' + genB64;
@@ -1143,6 +1314,58 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
     for (const o of tryPick.querySelectorAll('.sw-tryon-opt')) {
         o.addEventListener('click', () => { picked = o.dataset.pick === 'gen' ? 'gen' : 'orig'; refreshTryOnUI(); });
     }
+
+    panel.querySelector('#sw-generated-crop').addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        if (button.disabled) return;
+        button.disabled = true;
+        try {
+            const editingGenerated = picked === 'gen' && !!genB64;
+            const currentB64 = editingGenerated ? genB64 : await getFormImageB64();
+            if (!currentB64) throw new Error('нет картинки для кадрирования');
+            iigLog('INFO', `Wardrobe crop opened: source=${editingGenerated ? 'generated' : 'uploaded'} base64Length=${currentB64.length}`);
+            const cropped = await swCropGeneratedImage(currentB64);
+            if (!cropped || !document.body.contains(panel)) return;
+            if (editingGenerated) {
+                genB64 = cropped;
+                picked = 'gen';
+            } else {
+                origB64 = cropped;
+                origChanged = true;
+                previewSrc = `data:image/png;base64,${cropped}`;
+                picked = 'orig';
+            }
+            refreshTryOnUI();
+            toastr.success('Кадрирование применено', 'Гардероб', { timeOut: 2000 });
+        } catch (error) {
+            iigLog('ERROR', 'wardrobe crop failed:', error);
+            toastr.error('Не удалось обрезать изображение: ' + String(error.message || error), 'Гардероб');
+        } finally {
+            if (document.body.contains(panel)) button.disabled = false;
+        }
+    });
+
+    panel.querySelector('#sw-generated-download').addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        if (button.disabled) return;
+        button.disabled = true;
+        try {
+            const downloadingGenerated = picked === 'gen' && !!genB64;
+            const currentB64 = downloadingGenerated ? genB64 : await getFormImageB64();
+            if (!currentB64) throw new Error('нет картинки для сохранения');
+            iigLog('INFO', `Wardrobe image download requested: source=${downloadingGenerated ? 'generated' : 'uploaded'} base64Length=${currentB64.length}`);
+            const rawName = panel.querySelector('#sw-form-name').value.trim() || (isBuild ? 'assembled-outfit' : isGen ? 'generated-outfit' : 'outfit-try-on');
+            const fileName = `${rawName.replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80)}.png`;
+            const downloaded = await downloadImageSrc(`data:image/png;base64,${currentB64}`, fileName);
+            if (!downloaded) throw new Error('браузер не смог сохранить файл');
+            toastr.success('Изображение сохранено', 'Гардероб', { timeOut: 2000 });
+        } catch (error) {
+            iigLog('ERROR', 'wardrobe result download failed:', error);
+            toastr.error('Не удалось сохранить изображение: ' + String(error.message || error), 'Гардероб');
+        } finally {
+            if (document.body.contains(panel)) button.disabled = false;
+        }
+    });
 
     tryBtn.addEventListener('click', async () => {
         if (tryBtn.classList.contains('sw-tryon-busy')) return;
@@ -1191,26 +1414,27 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
             const saveAsTryOn = !isBuild || panel.querySelector('#sw-build-result-kind')?.value !== 'outfit';
             if (isEdit) {
                 item.name = name; item.type = type; item.description = desc;
-                if (useGen) {
+                const replacementB64 = useGen ? genB64 : (origChanged ? origB64 : null);
+                if (replacementB64) {
                     let stored = false;
                     if (view.shared) {
                         try {
-                            const jpeg = await swCompressBase64Image(genB64, swGetSettings().maxDimension, 0.85);
+                            const jpeg = await swCompressBase64Image(replacementB64, swGetSettings().maxDimension, 0.85);
                             const prefix = view.side === 'bot' ? 'sw_bot_' : 'sw_user_';
                             item.imagePath = await swSaveRefImageToFile(jpeg, prefix + name);
                             delete item.base64;
                             stored = true;
                         } catch (err) { iigLog('WARN', 'try-on file store failed, fallback to base64:', err.message); }
                     }
-                    if (!stored) { item.base64 = await swShrinkForStore(genB64); delete item.imagePath; }
-                    if (genSide) item.tryOnSide = genSide;
+                    if (!stored) { item.base64 = await swShrinkForStore(replacementB64); delete item.imagePath; }
+                    if (useGen && genSide) item.tryOnSide = genSide;
                     swSharedCache[view.side].b64 = null; swSharedCache[view.side].id = null;
                 }
                 swSave();
                 if (view.shared) swPreloadSharedActive(view.side);
             } else {
                 const newItem = { id: uid(), name, type, description: desc, addedAt: Date.now() };
-                const imgB64 = useGen ? genB64 : base64;
+                const imgB64 = useGen ? genB64 : origB64;
                 if (useGen && genSide && saveAsTryOn) newItem.tryOnSide = genSide;
                 if (view.shared) {
                     let stored = false;
@@ -1433,6 +1657,7 @@ function swCollectReferencedFiles() {
             for (const o of (outfits || [])) addRef(o.imagePath);
         }
     }
+
     const iig = ctx.extensionSettings?.[MODULE_NAME];
     if (iig) {
         addRef(iig.charRef?.imagePath);

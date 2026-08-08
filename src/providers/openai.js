@@ -24,7 +24,7 @@ import {
     getUserAvatarBase64,
     collectPreviousContextReferences,
 } from '../references.js';
-import { collectExtraReferences, getWardrobeAvatarOverrideBase64 } from '../extras.js';
+import { collectAvatarReferences, collectExtraReferences, mergeAvatarReferenceGroups } from '../extras.js';
 import {
     Provider,
     buildGenerationUrl,
@@ -65,14 +65,10 @@ export class OpenAIProvider extends Provider {
         const maxRefs = getOpenAIModelMaxReferences(modelKind) || MAX_GENERATION_REFERENCE_IMAGES;
         const refs = [];
 
-        if (settings.sendCharAvatar) {
-            const charAvatar = await getWardrobeAvatarOverrideBase64('bot') || await getCharacterAvatarBase64();
-            if (charAvatar) refs.push(charAvatar);
-        }
-        if (settings.sendUserAvatar) {
-            const userAvatar = await getWardrobeAvatarOverrideBase64('user') || await getUserAvatarBase64();
-            if (userAvatar) refs.push(userAvatar);
-        }
+        const avatarGroups = [];
+        if (settings.sendCharAvatar) avatarGroups.push(await collectAvatarReferences('bot', 'base64', prompt));
+        if (settings.sendUserAvatar) avatarGroups.push(await collectAvatarReferences('user', 'base64', prompt));
+        refs.push(...mergeAvatarReferenceGroups(avatarGroups, maxRefs));
 
         // Extras (NPC + wardrobe) — добавляем до matchedAdditionalRefs, чтобы
         // приоритет важных контекстных рефов был выше чем у lorebook-матчей.

@@ -92,7 +92,8 @@ export const defaultSettings = Object.freeze({
     // Nano-banana specific
     sendCharAvatar: false,
     sendUserAvatar: false,
-    useActiveUserPersonaAvatar: false,
+    optionalAvatarSending: false,
+    useActiveUserPersonaAvatar: true,
     userAvatarFile: '', // Selected user avatar filename from /User Avatars/
     aspectRatio: '1:1', // "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"
     overrideAspectRatio: false,
@@ -172,11 +173,24 @@ export const defaultSettings = Object.freeze({
     swShowHidden: false,
     swSendOutfitImageBot: true,
     swSendOutfitImageUser: true,
+    optionalWardrobeSending: false,
     // Custom avatars (avatar library) — заменяет дефолт из карточки/persona.
     avatarItems: [],
     avatarTags: [],
     activeAvatarChar: null,
     activeAvatarUser: null,
+    // Unified character/persona reference library from sillyimages-master 2.0.
+    // Legacy avatarItems are kept intact for safe migration/fallback.
+    characterReferenceLibrary: {
+        characters: {},
+        users: {},
+    },
+    activeCustomReferenceProfiles: {
+        char: '',
+        user: '',
+    },
+    legacyAvatarLibraryMigratedIds: [],
+    sendRefDescriptions: true,
     // Wardrobe injection в LLM-промпт через setExtensionPrompt.
     injectWardrobeToChat: true,
     wardrobeInjectionDepth: 1,
@@ -217,6 +231,7 @@ export const CONNECTION_FIELDS = Object.freeze([
     'overrideImageSize',
     'sendCharAvatar',
     'sendUserAvatar',
+    'optionalAvatarSending',
     'useActiveUserPersonaAvatar',
     'userAvatarFile',
     'naisteraAspectRatio',
@@ -1113,6 +1128,11 @@ export function ensureAdditionalReferencesArray(settings = getSettings()) {
     }
     active.refs = normalizeReferencesArrayInternal(active.refs);
     return active.refs;
+}
+
+// Name used by sillyimages-master 2.0 reference/library modules.
+export function getActiveLorebookReferences(settings = getSettings()) {
+    return ensureAdditionalReferencesArray(settings);
 }
 
 /**

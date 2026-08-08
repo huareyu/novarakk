@@ -57,6 +57,7 @@ export async function fetchVisionModels() {
 // ----- Shared low-level helper -----
 
 export const DEFAULT_APPEARANCE_VISION_PROMPT = 'Describe this character\'s physical appearance in detail. Focus on: face features, eye color, hair color and style, skin tone, body type, distinctive features. Be concise but thorough (2-4 sentences). Write in English.';
+export const DEFAULT_REFERENCE_APPEARANCE_VISION_PROMPT = 'Describe the visible character appearance or appearance detail in this reference image. Include relevant face, hair, body, clothing, colors, materials, accessories, and distinctive features, but only what is actually visible. Be concise but thorough (2-4 sentences). Write in English.';
 
 export async function callVisionApi(imageBase64, promptText) {
     const settings = getSettings();

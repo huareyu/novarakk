@@ -11,7 +11,7 @@
 import {
     getSettings,
     saveSettings,
-    ensureAdditionalReferencesArray,
+    getActiveLorebookReferences,
     ensureLorebooks,
     createLorebook,
     normalizeImageContextCount,
@@ -29,10 +29,10 @@ import {
     extractGeneratedImageUrlsFromText,
     getMessageRenderText,
 } from './parser.js';
-import { getActiveAvatarItem } from './extras.js';
 import { t } from './i18n.js';
+import { findFirstMatchKeyword, splitMatchKeywords } from './matching.js';
 
-// ----- Модульное состояние (раньше были module-level let) -----
+// ----- Module state -----
 
 const PERSONAS_MODULE_PATHS = Object.freeze([
     '/scripts/personas.js',
@@ -40,12 +40,101 @@ const PERSONAS_MODULE_PATHS = Object.freeze([
 ]);
 
 let personasModulePromise = null;
+let personasModuleCache = null;
 let cachedUserAvatars = [];
+const temporaryPrimaryReferenceIds = new Map();
+const MAX_CHARACTER_GENERATIONS = 48;
 
-// ----- Reference object helpers (image / description / source) -----
+function makeCharacterLibraryItemId(prefix) {
+    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeCharacterAppearanceItem(raw) {
+    const type = raw?.type === 'image' ? 'image' : 'text';
+    return {
+        id: String(raw?.id || '').trim() || makeCharacterLibraryItemId('appearance'),
+        type,
+        enabled: raw?.enabled !== false,
+        imagePath: type === 'image' ? normalizeStoredImagePath(raw?.imagePath) : '',
+        description: String(raw?.description || '').trim(),
+    };
+}
+
+function normalizeCharacterGeneration(raw) {
+    const imagePath = normalizeStoredImagePath(raw?.imagePath);
+    if (!imagePath) return null;
+    return {
+        id: String(raw?.id || '').trim() || makeCharacterLibraryItemId('generation'),
+        imagePath,
+        prompt: String(raw?.prompt || '').trim(),
+        createdAt: Number.isFinite(Number(raw?.createdAt)) ? Number(raw.createdAt) : Date.now(),
+    };
+}
+
+function normalizeCharacterLibraryEntry(raw) {
+    const tags = Array.isArray(raw?.tags) ? raw.tags : String(raw?.tags || '').split(',');
+    return {
+        displayName: String(raw?.displayName || '').trim(),
+        triggerKeywords: String(raw?.triggerKeywords || '').trim(),
+        custom: raw?.custom === true,
+        tags: [...new Set(tags.map((tag) => String(tag || '').trim()).filter(Boolean))],
+        primary: {
+            enabled: raw?.primary?.enabled !== false,
+            imagePath: normalizeStoredImagePath(raw?.primary?.imagePath),
+            description: String(raw?.primary?.description || '').trim(),
+        },
+        appearanceItems: (Array.isArray(raw?.appearanceItems) ? raw.appearanceItems : []).map(normalizeCharacterAppearanceItem),
+        generations: (Array.isArray(raw?.generations) ? raw.generations : [])
+            .map(normalizeCharacterGeneration)
+            .filter(Boolean)
+            .slice(0, MAX_CHARACTER_GENERATIONS),
+    };
+}
+
+function getTemporaryPrimaryKey(kind, key) {
+    return `${kind === 'user' ? 'user' : 'char'}:${String(key || '').trim()}`;
+}
+
+function ensureCharacterReferenceLibrary(settings = getSettings()) {
+    if (!settings.characterReferenceLibrary || typeof settings.characterReferenceLibrary !== 'object') {
+        settings.characterReferenceLibrary = { characters: {}, users: {} };
+    }
+    for (const bucketName of ['characters', 'users']) {
+        const bucket = settings.characterReferenceLibrary[bucketName];
+        settings.characterReferenceLibrary[bucketName] = bucket && typeof bucket === 'object' ? bucket : {};
+    }
+    return settings.characterReferenceLibrary;
+}
 
 function normalizeReferenceDescription(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+export function getCharacterReferenceLibrary(settings = getSettings()) {
+    return ensureCharacterReferenceLibrary(settings);
+}
+
+export function getCharacterReferenceKeyForCharacter(character, fallbackIndex = 0) {
+    const avatar = String(character?.avatar || '').trim();
+    if (avatar) return `avatar:${avatar}`;
+    const name = String(character?.name || '').trim();
+    if (name) return `name:${name}`;
+    return `id:${fallbackIndex}`;
+}
+
+export function getUserReferenceKeyForAvatar(avatarFile) {
+    const value = String(avatarFile || '').trim();
+    return value ? `avatar:${value}` : 'no-user-avatar';
+}
+
+export function characterAvatarUrl(character) {
+    const avatar = String(character?.avatar || '').trim();
+    return avatar ? `/characters/${encodeURIComponent(avatar)}` : '';
+}
+
+export function userAvatarUrl(avatarFile) {
+    const value = String(avatarFile || '').trim();
+    return value ? `/User Avatars/${encodeURIComponent(value)}` : '';
 }
 
 export function makeReferenceObject(image, description = '', source = '') {
@@ -77,6 +166,318 @@ export function getReferenceSource(ref) {
     return '';
 }
 
+export function getCurrentCharacterReferenceKey() {
+    try {
+        const context = SillyTavern.getContext();
+        const characterId = context?.characterId;
+        if (characterId === undefined || characterId === null || Number(characterId) < 0) {
+            return 'no-character';
+        }
+        return getCharacterReferenceKeyForCharacter(context?.characters?.[characterId] || {}, characterId);
+    } catch (_error) {
+        return 'no-character';
+    }
+}
+
+export async function getCurrentUserReferenceKey(settings = getSettings()) {
+    try {
+        const personasModule = await loadPersonasModule();
+        const activeAvatarId = String(personasModule?.user_avatar || '').trim();
+        if (activeAvatarId) return getUserReferenceKeyForAvatar(activeAvatarId);
+    } catch (_error) {
+        // No active persona is available.
+    }
+    return 'no-user-avatar';
+}
+
+export function getEffectiveCurrentCharacterReferenceKey(settings = getSettings()) {
+    return getActiveCustomCharacterLibraryProfileKey('char', settings) || getCurrentCharacterReferenceKey();
+}
+
+export async function getEffectiveCurrentUserReferenceKey(settings = getSettings()) {
+    return getActiveCustomCharacterLibraryProfileKey('user', settings) || await getCurrentUserReferenceKey(settings);
+}
+
+export async function getEffectiveCharacterLibraryDisplayName(kind, fallback = '', settings = getSettings()) {
+    const normalizedKind = kind === 'user' ? 'user' : 'char';
+    const key = normalizedKind === 'user'
+        ? await getEffectiveCurrentUserReferenceKey(settings)
+        : getEffectiveCurrentCharacterReferenceKey(settings);
+    const entry = getCharacterLibraryEntry(normalizedKind, key, settings, { create: false });
+    return String(entry?.displayName || fallback || '').trim();
+}
+
+export function getCharacterLibraryEntry(kind, key, settings = getSettings(), { create = true } = {}) {
+    const library = ensureCharacterReferenceLibrary(settings);
+    const bucket = kind === 'user' ? library.users : library.characters;
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey) return null;
+    if (!bucket[normalizedKey] && create) {
+        bucket[normalizedKey] = normalizeCharacterLibraryEntry({});
+    }
+    if (!bucket[normalizedKey]) return null;
+    bucket[normalizedKey] = normalizeCharacterLibraryEntry(bucket[normalizedKey]);
+    return bucket[normalizedKey];
+}
+
+export function deleteCharacterLibraryEntry(kind, key, settings = getSettings()) {
+    const library = ensureCharacterReferenceLibrary(settings);
+    const bucket = kind === 'user' ? library.users : library.characters;
+    delete bucket[String(key || '').trim()];
+    if (settings.activeCustomReferenceProfiles?.[kind === 'user' ? 'user' : 'char'] === String(key || '').trim()) {
+        settings.activeCustomReferenceProfiles[kind === 'user' ? 'user' : 'char'] = '';
+    }
+    temporaryPrimaryReferenceIds.delete(getTemporaryPrimaryKey(kind, key));
+    saveSettings();
+}
+
+export function createCustomCharacterLibraryProfile(kind, name = '', settings = getSettings()) {
+    const normalizedKind = kind === 'user' ? 'user' : 'char';
+    const key = `custom:${makeCharacterLibraryItemId('profile')}`;
+    const entry = getCharacterLibraryEntry(normalizedKind, key, settings);
+    entry.custom = true;
+    entry.displayName = String(name || '').trim() || (normalizedKind === 'user' ? 'New persona profile' : 'New character profile');
+    entry.triggerKeywords = entry.displayName;
+    saveSettings();
+    return { kind: normalizedKind, key, entry };
+}
+
+function ensureActiveCustomProfiles(settings = getSettings()) {
+    if (!settings.activeCustomReferenceProfiles || typeof settings.activeCustomReferenceProfiles !== 'object') {
+        settings.activeCustomReferenceProfiles = { char: '', user: '' };
+    }
+    settings.activeCustomReferenceProfiles.char = String(settings.activeCustomReferenceProfiles.char || '').trim();
+    settings.activeCustomReferenceProfiles.user = String(settings.activeCustomReferenceProfiles.user || '').trim();
+    return settings.activeCustomReferenceProfiles;
+}
+
+export function getActiveCustomCharacterLibraryProfileKey(kind, settings = getSettings()) {
+    const normalizedKind = kind === 'user' ? 'user' : 'char';
+    const key = ensureActiveCustomProfiles(settings)[normalizedKind];
+    const entry = key ? getCharacterLibraryEntry(normalizedKind, key, settings, { create: false }) : null;
+    return entry?.custom ? key : '';
+}
+
+export function setActiveCustomCharacterLibraryProfile(kind, key = '', settings = getSettings()) {
+    const normalizedKind = kind === 'user' ? 'user' : 'char';
+    const normalizedKey = String(key || '').trim();
+    const entry = normalizedKey ? getCharacterLibraryEntry(normalizedKind, normalizedKey, settings, { create: false }) : null;
+    ensureActiveCustomProfiles(settings)[normalizedKind] = entry?.custom ? normalizedKey : '';
+    saveSettings();
+    return ensureActiveCustomProfiles(settings)[normalizedKind];
+}
+
+export function addCharacterLibraryAppearanceItem(kind, key, type, settings = getSettings()) {
+    const entry = getCharacterLibraryEntry(kind, key, settings);
+    const item = normalizeCharacterAppearanceItem({ type });
+    entry.appearanceItems.push(item);
+    saveSettings();
+    return item;
+}
+
+export function removeCharacterLibraryAppearanceItem(kind, key, itemId, settings = getSettings()) {
+    const entry = getCharacterLibraryEntry(kind, key, settings, { create: false });
+    const normalizedId = String(itemId || '').trim();
+    if (!entry || !normalizedId) return false;
+    const nextItems = entry.appearanceItems.filter((item) => item.id !== normalizedId);
+    if (nextItems.length === entry.appearanceItems.length) return false;
+    entry.appearanceItems = nextItems;
+    if (temporaryPrimaryReferenceIds.get(getTemporaryPrimaryKey(kind, key)) === normalizedId) {
+        temporaryPrimaryReferenceIds.delete(getTemporaryPrimaryKey(kind, key));
+    }
+    saveSettings();
+    return true;
+}
+
+function getCharacterAppearanceTextDescription(entry) {
+    return (entry?.appearanceItems || [])
+        .filter((item) => item.type === 'text' && item.enabled !== false)
+        .map((item) => item.description)
+        .map(normalizeReferenceDescription)
+        .filter(Boolean)
+        .join(' ');
+}
+
+export function getTemporaryCharacterPrimary(kind, key, settings = getSettings()) {
+    const itemId = temporaryPrimaryReferenceIds.get(getTemporaryPrimaryKey(kind, key));
+    if (!itemId) return null;
+    const entry = getCharacterLibraryEntry(kind, key, settings, { create: false });
+    const item = entry?.appearanceItems.find((candidate) => (
+        candidate.id === itemId
+        && candidate.type === 'image'
+        && candidate.enabled !== false
+        && normalizeStoredImagePath(candidate.imagePath)
+    ));
+    if (item) return item;
+    temporaryPrimaryReferenceIds.delete(getTemporaryPrimaryKey(kind, key));
+    return null;
+}
+
+export function setTemporaryCharacterPrimary(kind, key, itemId, settings = getSettings()) {
+    const mapKey = getTemporaryPrimaryKey(kind, key);
+    const current = temporaryPrimaryReferenceIds.get(mapKey);
+    if (!itemId || current === itemId) {
+        temporaryPrimaryReferenceIds.delete(mapKey);
+        return null;
+    }
+    const entry = getCharacterLibraryEntry(kind, key, settings, { create: false });
+    const item = entry?.appearanceItems.find((candidate) => (
+        candidate.id === itemId
+        && candidate.type === 'image'
+        && candidate.enabled !== false
+        && normalizeStoredImagePath(candidate.imagePath)
+    ));
+    if (!item) return null;
+    temporaryPrimaryReferenceIds.set(mapKey, item.id);
+    return item;
+}
+
+export function recordCharacterGeneration(imagePath, prompt = '', settings = getSettings()) {
+    const normalizedPath = normalizeStoredImagePath(imagePath);
+    const key = getCurrentCharacterReferenceKey();
+    if (!normalizedPath || key === 'no-character') return null;
+    const entry = getCharacterLibraryEntry('char', key, settings);
+    const generation = {
+        id: makeCharacterLibraryItemId('generation'),
+        imagePath: normalizedPath,
+        prompt: String(prompt || '').trim(),
+        createdAt: Date.now(),
+    };
+    entry.generations = [
+        generation,
+        ...entry.generations.filter((item) => item.imagePath !== normalizedPath),
+    ].slice(0, MAX_CHARACTER_GENERATIONS);
+    saveSettings();
+    return generation;
+}
+
+export function syncCharacterGenerationHistory(key, imagePaths, settings = getSettings()) {
+    const entry = getCharacterLibraryEntry('char', key, settings, { create: false });
+    if (!entry) return [];
+    const existingByPath = new Map(entry.generations.map((generation) => [generation.imagePath, generation]));
+    const seen = new Set();
+    entry.generations = (Array.isArray(imagePaths) ? imagePaths : [])
+        .map(normalizeStoredImagePath)
+        .filter((imagePath) => imagePath && !seen.has(imagePath) && seen.add(imagePath))
+        .map((imagePath, index) => existingByPath.get(imagePath) || {
+            id: makeCharacterLibraryItemId('generation'),
+            imagePath,
+            prompt: '',
+            createdAt: Date.now() - index,
+        })
+        .slice(0, MAX_CHARACTER_GENERATIONS);
+    saveSettings();
+    return entry.generations;
+}
+
+export function removeCharacterGeneration(key, generationId, settings = getSettings()) {
+    const entry = getCharacterLibraryEntry('char', key, settings, { create: false });
+    const normalizedId = String(generationId || '').trim();
+    if (!entry || !normalizedId) return null;
+    const generation = entry.generations.find((item) => item.id === normalizedId) || null;
+    if (!generation) return null;
+    entry.generations = entry.generations.filter((item) => item.id !== normalizedId);
+    saveSettings();
+    return generation;
+}
+
+export function getCharacterLibraryDescription(kind, key, settings = getSettings()) {
+    const entry = getCharacterLibraryEntry(kind, key, settings, { create: false });
+    if (!entry) return '';
+    return [
+        entry.primary.enabled !== false ? entry.primary.description : '',
+        getCharacterAppearanceTextDescription(entry),
+    ].map(normalizeReferenceDescription).filter(Boolean).join(' ');
+}
+
+export function characterLibraryEntryMatchesPrompt(kind, key, prompt, settings = getSettings()) {
+    const entry = getCharacterLibraryEntry(kind, key, settings, { create: false });
+    if (!entry) return false;
+    const keywords = splitMatchKeywords(entry.triggerKeywords);
+    return keywords.length > 0 && Boolean(findFirstMatchKeyword(prompt, keywords));
+}
+
+export function getCurrentUserReferenceKeySync(settings = getSettings()) {
+    try {
+        const fromModule = String(personasModuleCache?.user_avatar || '').trim();
+        if (fromModule) return getUserReferenceKeyForAvatar(fromModule);
+        const context = SillyTavern.getContext();
+        const fromChat = String(context?.chatMetadata?.persona || '').trim();
+        if (fromChat) return getUserReferenceKeyForAvatar(fromChat);
+        const matches = Object.entries(context?.powerUserSettings?.personas || {})
+            .filter(([, name]) => String(name || '') === String(context?.name1 || ''))
+            .map(([avatar]) => String(avatar || '').trim())
+            .filter(Boolean);
+        if (matches.length === 1) return getUserReferenceKeyForAvatar(matches[0]);
+    } catch (_error) {
+        // No synchronous persona context is available.
+    }
+    return 'no-user-avatar';
+}
+
+export function activeCharacterLibraryEntryMatchesPrompt(kind, prompt, settings = getSettings()) {
+    const key = kind === 'user'
+        ? (getActiveCustomCharacterLibraryProfileKey('user', settings) || getCurrentUserReferenceKeySync(settings))
+        : getEffectiveCurrentCharacterReferenceKey(settings);
+    return characterLibraryEntryMatchesPrompt(kind, key, prompt, settings);
+}
+
+export async function activeCharacterLibraryEntryMatchesPromptAsync(kind, prompt, settings = getSettings()) {
+    const key = kind === 'user'
+        ? await getEffectiveCurrentUserReferenceKey(settings)
+        : getEffectiveCurrentCharacterReferenceKey(settings);
+    return characterLibraryEntryMatchesPrompt(kind, key, prompt, settings);
+}
+
+export async function shouldSendCharacterLibraryReference(kind, prompt, settings = getSettings()) {
+    if (settings.optionalAvatarSending !== true) return true;
+    const key = kind === 'user'
+        ? await getEffectiveCurrentUserReferenceKey(settings)
+        : getEffectiveCurrentCharacterReferenceKey(settings);
+    return characterLibraryEntryMatchesPrompt(kind, key, prompt, settings);
+}
+
+export async function buildActiveCharacterLibraryPromptBlock(settings = getSettings(), prompt = '') {
+    if (settings.sendRefDescriptions === false) return '';
+    const useNaisteraFlags = settings.apiType === 'naistera';
+    const charKey = getEffectiveCurrentCharacterReferenceKey(settings);
+    const userKey = await getEffectiveCurrentUserReferenceKey(settings);
+    const targets = [
+        {
+            kind: 'char',
+            enabled: useNaisteraFlags ? settings.naisteraSendCharAvatar : settings.sendCharAvatar,
+            key: charKey,
+            label: getCharacterLibraryEntry('char', charKey, settings, { create: false })?.custom
+                ? getCharacterLibraryEntry('char', charKey, settings, { create: false })?.displayName || '{{char}}'
+                : '{{char}}',
+        },
+        {
+            kind: 'user',
+            enabled: useNaisteraFlags ? settings.naisteraSendUserAvatar : settings.sendUserAvatar,
+            key: userKey,
+            label: getCharacterLibraryEntry('user', userKey, settings, { create: false })?.custom
+                ? getCharacterLibraryEntry('user', userKey, settings, { create: false })?.displayName || '{{user}}'
+                : '{{user}}',
+        },
+    ];
+    const lines = [];
+    for (const target of targets) {
+        if (!target.enabled) continue;
+        if (!await shouldSendCharacterLibraryReference(target.kind, prompt, settings)) continue;
+        const entry = getCharacterLibraryEntry(target.kind, target.key, settings, { create: false });
+        if (!entry) continue;
+        const descriptions = [
+            entry.primary?.enabled !== false ? entry.primary?.description : '',
+            ...(entry.appearanceItems || [])
+                .filter(item => item.enabled !== false)
+                .map(item => item.description),
+        ].map(normalizeReferenceDescription).filter(Boolean);
+        const unique = [...new Set(descriptions)];
+        if (unique.length) lines.push(`- ${target.label}: ${unique.join(' ')}`);
+    }
+    return lines.length ? `Character appearance references:\n${lines.join('\n')}` : '';
+}
+
 // ----- Загрузка модуля personas (для активного user persona avatar) -----
 
 export async function loadPersonasModule() {
@@ -85,7 +486,9 @@ export async function loadPersonasModule() {
             let lastError = null;
             for (const modulePath of PERSONAS_MODULE_PATHS) {
                 try {
-                    return await import(modulePath);
+                    const module = await import(modulePath);
+                    personasModuleCache = module;
+                    return module;
                 } catch (error) {
                     lastError = error;
                 }
@@ -128,6 +531,10 @@ export async function fetchUserAvatars() {
         console.error('[IIG] Failed to fetch user avatars:', error);
         return [];
     }
+}
+
+export function getCachedUserAvatars() {
+    return [...cachedUserAvatars];
 }
 
 // ----- Avatar dropdown widget (двойной: Gemini + Naistera) -----
@@ -269,169 +676,126 @@ export function buildUserAvatarDropdownControl(prefix, selectedAvatar) {
     `;
 }
 
-// ----- Character avatar (base64 / dataUrl) -----
-
-/**
- * Если в Avatar Library активен кастомный аватар для char/user — возвращает
- * его imageData (чистый base64), иначе null. extras.js не зависит от
- * references.js, поэтому циклической зависимости нет.
- */
-function getActiveAvatarOverrideBase64(target) {
-    try {
-        const item = getActiveAvatarItem(target);
-        return item?.imageData || null;
-    } catch (_e) {
-        return null;
-    }
-}
-
-export async function getCharacterAvatarBase64() {
-    try {
-        const override = getActiveAvatarOverrideBase64('char');
-        if (override) return override;
-
-        const context = SillyTavern.getContext();
-
-        console.log('[IIG] Getting character avatar, characterId:', context.characterId);
-
-        if (context.characterId === undefined || context.characterId === null) {
-            console.log('[IIG] No character selected');
-            return null;
-        }
-
-        // Try context method first
-        if (typeof context.getCharacterAvatar === 'function') {
-            const avatarUrl = context.getCharacterAvatar(context.characterId);
-            console.log('[IIG] getCharacterAvatar returned:', avatarUrl);
-            if (avatarUrl) {
-                return await imageUrlToBase64(avatarUrl);
-            }
-        }
-
-        // Fallback: try to get from characters array
-        const character = context.characters?.[context.characterId];
-        console.log('[IIG] Character from array:', character?.name, 'avatar:', character?.avatar);
-        if (character?.avatar) {
-            const avatarUrl = `/characters/${encodeURIComponent(character.avatar)}`;
-            console.log('[IIG] Found character avatar:', avatarUrl);
-            return await imageUrlToBase64(avatarUrl);
-        }
-
-        console.log('[IIG] Could not get character avatar');
-        return null;
-    } catch (error) {
-        console.error('[IIG] Error getting character avatar:', error);
-        return null;
-    }
-}
-
-export async function getCharacterAvatarDataUrl() {
-    try {
-        const override = getActiveAvatarOverrideBase64('char');
-        if (override) return `data:image/png;base64,${override}`;
-
-        const context = SillyTavern.getContext();
-
-        if (context.characterId === undefined || context.characterId === null) {
-            return null;
-        }
-
-        if (typeof context.getCharacterAvatar === 'function') {
-            const avatarUrl = context.getCharacterAvatar(context.characterId);
-            if (avatarUrl) {
-                return await imageUrlToDataUrl(avatarUrl);
-            }
-        }
-
-        const character = context.characters?.[context.characterId];
-        if (character?.avatar) {
-            const avatarUrl = `/characters/${encodeURIComponent(character.avatar)}`;
-            return await imageUrlToDataUrl(avatarUrl);
-        }
-
-        return null;
-    } catch (error) {
-        console.error('[IIG] Error getting character avatar data URL:', error);
-        return null;
-    }
-}
-
 // ----- User avatar URL resolver (persona + selected file) -----
 
 export async function getSelectedUserAvatarUrl() {
-    const settings = getSettings();
-
-    if (settings.useActiveUserPersonaAvatar) {
-        try {
-            const personasModule = await loadPersonasModule();
-            const activeAvatarId = String(personasModule?.user_avatar || '').trim();
-            if (!activeAvatarId) {
-                console.log('[IIG] No active user persona avatar selected');
-                if (!settings.userAvatarFile) {
-                    return null;
-                }
-            } else {
-                if (typeof personasModule?.getUserAvatar === 'function') {
-                    const resolved = String(personasModule.getUserAvatar(activeAvatarId) || '').trim();
-                    if (resolved) {
-                        const normalized = resolved.replace(/^\/+/, '');
-                        console.log('[IIG] Using active user persona avatar:', normalized);
-                        return `/${normalized}`;
-                    }
-                }
-
-                const fallback = `/User Avatars/${encodeURIComponent(activeAvatarId)}`;
-                console.log('[IIG] Falling back to active user persona avatar path:', fallback);
-                return fallback;
+    try {
+        const personasModule = await loadPersonasModule();
+        const activeAvatarId = String(personasModule?.user_avatar || '').trim();
+        if (!activeAvatarId) {
+            console.log('[IIG] No active user persona avatar selected');
+            return null;
+        }
+        if (typeof personasModule?.getUserAvatar === 'function') {
+            const resolved = String(personasModule.getUserAvatar(activeAvatarId) || '').trim();
+            if (resolved) {
+                const normalized = resolved.replace(/^\/+/, '');
+                console.log('[IIG] Using active user persona avatar:', normalized);
+                return `/${normalized}`;
             }
-        } catch (error) {
-            console.error('[IIG] Failed to resolve active user persona avatar:', error);
-            if (!settings.userAvatarFile) {
-                return null;
+        }
+
+        const fallback = `/User Avatars/${encodeURIComponent(activeAvatarId)}`;
+        console.log('[IIG] Falling back to active user persona avatar path:', fallback);
+        return fallback;
+    } catch (error) {
+        console.error('[IIG] Failed to resolve active user persona avatar:', error);
+        return null;
+    }
+}
+
+async function getCurrentCharacterAvatarUrl() {
+    try {
+        const context = SillyTavern.getContext();
+        const characterId = context?.characterId;
+        if (characterId === undefined || characterId === null || Number(characterId) < 0) return '';
+        if (typeof context.getCharacterAvatar === 'function') {
+            const resolved = String(context.getCharacterAvatar(characterId) || '').trim();
+            if (resolved) return resolved;
+        }
+        return characterAvatarUrl(context.characters?.[characterId]);
+    } catch (_error) {
+        return '';
+    }
+}
+
+export async function collectCharacterLibraryReferences(kind, format, settings = getSettings(), prompt = null) {
+    if (prompt !== null && !await shouldSendCharacterLibraryReference(kind, prompt, settings)) return [];
+    const isUser = kind === 'user';
+    const key = isUser ? await getEffectiveCurrentUserReferenceKey(settings) : getEffectiveCurrentCharacterReferenceKey(settings);
+    const entry = getCharacterLibraryEntry(kind, key, settings, { create: false });
+    const convert = format === 'dataUrl' ? imageUrlToDataUrl : imageUrlToBase64;
+    const baseAvatarUrl = entry?.custom ? '' : (isUser ? await getSelectedUserAvatarUrl() : await getCurrentCharacterAvatarUrl());
+    const source = isUser ? 'user' : 'char';
+    const results = [];
+    const sharedDescription = getCharacterLibraryDescription(kind, key, settings);
+    const appearanceDescription = getCharacterAppearanceTextDescription(entry);
+    const temporaryPrimary = getTemporaryCharacterPrimary(kind, key, settings);
+
+    if (temporaryPrimary) {
+        const image = await convert(normalizeStoredImagePath(temporaryPrimary.imagePath));
+        if (image) {
+            results.push(makeReferenceObject(
+                image,
+                `${appearanceDescription} ${temporaryPrimary.description}`.trim(),
+                source,
+            ));
+        }
+    }
+
+    const primary = entry?.primary || { enabled: true, imagePath: '', description: '' };
+    if (primary.enabled !== false) {
+        const primaryPath = normalizeStoredImagePath(primary.imagePath) || baseAvatarUrl;
+        if (primaryPath) {
+            const image = await convert(primaryPath);
+            if (image) {
+                results.push(makeReferenceObject(
+                    image,
+                    temporaryPrimary ? primary.description : sharedDescription,
+                    source,
+                ));
             }
         }
     }
 
-    if (!settings.userAvatarFile) {
-        console.log('[IIG] No user avatar selected in settings');
-        return null;
+    for (const item of entry?.appearanceItems || []) {
+        if (item.type !== 'image' || item.enabled === false) continue;
+        if (item.id === temporaryPrimary?.id) continue;
+        const imagePath = normalizeStoredImagePath(item.imagePath);
+        if (!imagePath) continue;
+        const image = await convert(imagePath);
+        if (image) {
+            const description = results.length === 0 && sharedDescription
+                ? `${sharedDescription} ${item.description}`.trim()
+                : item.description;
+            results.push(makeReferenceObject(image, description, source));
+        }
     }
 
-    const avatarUrl = `/User Avatars/${encodeURIComponent(settings.userAvatarFile)}`;
-    console.log('[IIG] Using selected user avatar:', avatarUrl);
-    return avatarUrl;
+    return results;
+}
+
+// Compatibility helpers used by Novarakk providers, wardrobe and extras.
+// The new library is the single source of avatar references; its first
+// enabled reference acts as the former standalone avatar value.
+export async function getCharacterAvatarBase64() {
+    const refs = await collectCharacterLibraryReferences('char', 'base64');
+    return getReferenceImage(refs[0]) || null;
+}
+
+export async function getCharacterAvatarDataUrl() {
+    const refs = await collectCharacterLibraryReferences('char', 'dataUrl');
+    return getReferenceImage(refs[0]) || null;
 }
 
 export async function getUserAvatarBase64() {
-    try {
-        const override = getActiveAvatarOverrideBase64('user');
-        if (override) return override;
-
-        const avatarUrl = await getSelectedUserAvatarUrl();
-        if (!avatarUrl) {
-            return null;
-        }
-        return await imageUrlToBase64(avatarUrl);
-    } catch (error) {
-        console.error('[IIG] Error getting user avatar:', error);
-        return null;
-    }
+    const refs = await collectCharacterLibraryReferences('user', 'base64');
+    return getReferenceImage(refs[0]) || null;
 }
 
 export async function getUserAvatarDataUrl() {
-    try {
-        const override = getActiveAvatarOverrideBase64('user');
-        if (override) return `data:image/png;base64,${override}`;
-
-        const avatarUrl = await getSelectedUserAvatarUrl();
-        if (!avatarUrl) {
-            return null;
-        }
-        return await imageUrlToDataUrl(avatarUrl);
-    } catch (error) {
-        console.error('[IIG] Error getting user avatar data URL:', error);
-        return null;
-    }
+    const refs = await collectCharacterLibraryReferences('user', 'dataUrl');
+    return getReferenceImage(refs[0]) || null;
 }
 
 // ----- Previous-message context images -----
@@ -484,129 +848,175 @@ export async function collectPreviousContextReferences(messageId, format, reques
 
 // ----- Additional references -----
 
-export function buildAdditionalReferenceRowsHtml(settings = getSettings()) {
-    const refs = ensureAdditionalReferencesArray(settings);
-
-    if (refs.length === 0) {
-        return `<p class="hint">${t`No references yet. Add one above.`}</p>`;
-    }
-
-    const lastIndex = refs.length - 1;
-    return refs.map((ref, index) => {
+export function buildAdditionalReferenceRowsHtml(settings = getSettings(), viewState = {}) {
+    const refs = getActiveLorebookReferences(settings);
+    const isPowerMode = settings.additionalReferencesMode === 'power';
+    const selectedId = String(viewState.selectedId || '');
+    const selectedIndex = Math.max(0, refs.findIndex((ref) => ref.id === selectedId));
+    const selectedRef = refs[selectedIndex] || null;
+    const query = String(viewState.query || '');
+    const filter = ['enabled', 'match', 'always'].includes(viewState.filter) ? viewState.filter : 'all';
+    const listRowsHtml = refs.map((ref, index) => {
         const previewSrc = normalizeStoredImagePath(ref.imagePath);
         const isAlways = ref.matchMode === 'always';
         const isEnabled = ref.enabled !== false;
-        const useRegex = ref.useRegex === true;
-        const isEmpty = !ref.name && !previewSrc;
-
-        const summaryThumb = previewSrc
-            ? `<img src="${sanitizeForHtml(previewSrc)}" class="iig-ref-summary-thumb">`
-            : `<div class="iig-ref-summary-thumb iig-ref-summary-thumb-empty"><i class="fa-solid fa-image"></i></div>`;
-
-        const displayName = ref.name || t`Unnamed reference`;
-        const badges = [];
-        badges.push(`<span class="iig-ref-badge ${isAlways ? 'iig-ref-badge-always' : 'iig-ref-badge-match'}">${isAlways ? t`Always` : t`Match`}</span>`);
-        if (useRegex) badges.push(`<span class="iig-ref-badge">${t`Regex`}</span>`);
-        if (ref.group) badges.push(`<span class="iig-ref-badge iig-ref-badge-group">${sanitizeForHtml(ref.group)}</span>`);
-
-        const bodyThumb = previewSrc
-            ? `<img src="${sanitizeForHtml(previewSrc)}" alt="${sanitizeForHtml(ref.name || `ref-${index + 1}`)}" class="iig-additional-ref-thumb">`
-            : `<div class="iig-additional-ref-thumb iig-additional-ref-thumb-placeholder">${t`none`}</div>`;
-
-        const isFirst = index === 0;
-        const isLast = index === lastIndex;
-
+        const previewHtml = previewSrc
+            ? `<img src="${sanitizeForHtml(previewSrc)}" alt="${sanitizeForHtml(ref.name || `ref-${index + 1}`)}" class="iig-additional-ref-list-thumb">`
+            : `<div class="iig-additional-ref-list-thumb iig-additional-ref-thumb-placeholder"><i class="fa-solid fa-image"></i></div>`;
+        const title = String(ref.name || '').trim() || t`Untitled reference`;
+        const description = String(ref.description || '').replace(/\s+/g, ' ').trim() || t`No description`;
+        const searchText = `${ref.name || ''} ${ref.description || ''} ${ref.group || ''}`.toLowerCase();
         return `
-            <div class="iig-additional-ref-row ${isEnabled ? '' : 'iig-additional-ref-row-disabled'} ${isEmpty ? 'iig-ref-expanded' : ''}" data-ref-index="${index}">
-                <div class="iig-ref-summary" data-ref-toggle>
-                    <div class="iig-ref-drag-handle" draggable="true" title="${t`Drag to reorder`}"><i class="fa-solid fa-grip-vertical"></i></div>
-                    ${summaryThumb}
-                    <span class="iig-ref-summary-name ${ref.name ? '' : 'iig-ref-summary-name-empty'}">${sanitizeForHtml(displayName)}</span>
-                    <div class="iig-ref-summary-badges">${badges.join('')}</div>
-                    <label class="checkbox_label iig-ref-summary-enabled" title="${isEnabled ? t`Disable reference` : t`Enable reference`}">
-                        <input type="checkbox" class="iig-additional-ref-enabled" ${isEnabled ? 'checked' : ''}>
-                        <span></span>
-                    </label>
-                    <div class="iig-ref-chevron"><i class="fa-solid fa-chevron-down"></i></div>
+            <div
+                class="iig-additional-ref-list-row ${ref.id === selectedRef?.id ? 'selected' : ''} ${isEnabled ? '' : 'disabled'}"
+                data-ref-index="${index}"
+                data-ref-id="${sanitizeForHtml(ref.id)}"
+                data-ref-search="${sanitizeForHtml(searchText)}"
+                data-ref-enabled="${isEnabled ? 'true' : 'false'}"
+                data-ref-match-mode="${isAlways ? 'always' : 'match'}"
+            >
+                <label class="checkbox_label iig-additional-ref-list-enabled" title="${isEnabled ? t`Disable reference` : t`Enable reference`}">
+                    <input type="checkbox" class="iig-additional-ref-enabled" ${isEnabled ? 'checked' : ''}>
+                    <span></span>
+                </label>
+                <button type="button" class="menu_button iig-additional-ref-select" data-ref-select="${sanitizeForHtml(ref.id)}">
+                    ${previewHtml}
+                    <span class="iig-additional-ref-list-copy">
+                        <strong>${sanitizeForHtml(title)}</strong>
+                        <small>${sanitizeForHtml(description)}</small>
+                    </span>
+                    <span class="iig-additional-ref-list-badges">
+                        <span class="iig-reference-badge">${isAlways ? t`Always` : t`Match`}</span>
+                        ${isPowerMode && ref.useRegex === true ? `<span class="iig-reference-badge">${t`Regex`}</span>` : ''}
+                        ${isPowerMode && ref.group ? `<span class="iig-reference-badge">${sanitizeForHtml(ref.group)}</span>` : ''}
+                    </span>
+                </button>
+            </div>`;
+    }).join('');
+
+    const selectedPreviewSrc = normalizeStoredImagePath(selectedRef?.imagePath);
+    const selectedPreviewHtml = selectedPreviewSrc
+        ? `<img src="${sanitizeForHtml(selectedPreviewSrc)}" alt="${sanitizeForHtml(selectedRef?.name || t`Reference`)}" class="iig-additional-ref-editor-thumb">`
+        : `<div class="iig-additional-ref-editor-thumb iig-additional-ref-thumb-placeholder"><i class="fa-solid fa-image"></i></div>`;
+    const editorHtml = selectedRef ? `
+        <div class="iig-additional-ref-editor-content" data-ref-index="${selectedIndex}" data-ref-id="${sanitizeForHtml(selectedRef.id)}">
+            <div class="iig-additional-ref-editor-heading">
+                <div>
+                    <strong>${sanitizeForHtml(String(selectedRef.name || '').trim() || t`Untitled reference`)}</strong>
+                    <small>${isPowerMode ? t`Advanced editor` : t`Reference editor`}</small>
                 </div>
-                <div class="iig-ref-body">
-                    <div class="iig-additional-ref-content">
-                        <div class="iig-additional-ref-preview">
-                            ${bodyThumb}
-                        </div>
-                        <div class="iig-additional-ref-main">
-                            <div class="iig-additional-ref-header">
-                                <input
-                                    type="text"
-                                    class="text_pole flex1 iig-additional-ref-name"
-                                    placeholder="${t`Trigger name (or regex)`}"
-                                    value="${sanitizeForHtml(ref.name || '')}"
-                                >
-                                <label class="menu_button iig-additional-ref-upload" title="${t`Upload image`}">
-                                    <i class="fa-solid fa-upload"></i>
-                                    <input type="file" accept="image/*" class="iig-additional-ref-file" style="display:none">
-                                </label>
-                                <div class="menu_button iig-additional-ref-upload-url" title="${t`Upload image by URL`}">
-                                    <i class="fa-solid fa-link"></i>
-                                </div>
-                                <div class="menu_button iig-additional-ref-remove" title="${t`Delete`}">
-                                    <i class="fa-solid fa-trash"></i>
-                                </div>
-                            </div>
-                            <textarea
-                                class="text_pole flex1 iig-additional-ref-description"
-                                rows="2"
-                                placeholder="${t`Reference description`}"
-                            >${sanitizeForHtml(ref.description || '')}</textarea>
-                            <div class="iig-additional-ref-lorebook-grid">
-                                <input
-                                    type="text"
-                                    class="text_pole iig-additional-ref-group"
-                                    placeholder="${t`Group (e.g. characters, locations)`}"
-                                    value="${sanitizeForHtml(ref.group || '')}"
-                                >
-                                <input
-                                    type="text"
-                                    class="text_pole iig-additional-ref-secondary"
-                                    placeholder="${t`Secondary keys (AND, comma-separated)`}"
-                                    value="${sanitizeForHtml(ref.secondaryKeys || '')}"
-                                >
-                                <input
-                                    type="number"
-                                    class="text_pole iig-additional-ref-priority"
-                                    placeholder="${t`Priority`}"
-                                    step="1"
-                                    value="${Number.isFinite(ref.priority) ? ref.priority : 0}"
-                                    title="${t`Higher priority is matched first when provider limits references`}"
-                                >
-                            </div>
-                            <div class="iig-additional-ref-footer">
-                                <label class="checkbox_label">
-                                    <input type="checkbox" class="iig-additional-ref-always" ${isAlways ? 'checked' : ''}>
-                                    <span>${isAlways ? t`Always send` : t`Send on match`}</span>
-                                </label>
-                                <label class="checkbox_label" title="${t`Interpret trigger as JS regex. Secondary keys remain literal.`}">
-                                    <input type="checkbox" class="iig-additional-ref-regex" ${useRegex ? 'checked' : ''}>
-                                    <span>${t`Regex`}</span>
-                                </label>
-                                <div class="menu_button iig-additional-ref-vision ${previewSrc ? '' : 'iig-hidden'}" title="${t`Generate description via Vision AI`}">
-                                    <i class="fa-solid fa-robot"></i>
-                                </div>
-                                <div class="iig-additional-ref-move">
-                                    <div class="menu_button iig-additional-ref-move-up ${isFirst ? 'disabled' : ''}" title="${t`Move up`}" ${isFirst ? 'aria-disabled="true"' : ''}>
-                                        <i class="fa-solid fa-arrow-up"></i>
-                                    </div>
-                                    <div class="menu_button iig-additional-ref-move-down ${isLast ? 'disabled' : ''}" title="${t`Move down`}" ${isLast ? 'aria-disabled="true"' : ''}>
-                                        <i class="fa-solid fa-arrow-down"></i>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                <label class="checkbox_label" title="${selectedRef.enabled !== false ? t`Disable reference` : t`Enable reference`}">
+                    <input type="checkbox" class="iig-additional-ref-enabled" ${selectedRef.enabled !== false ? 'checked' : ''}>
+                    <span></span>
+                </label>
+            </div>
+
+            <div class="iig-additional-ref-editor-main">
+                <div class="iig-additional-ref-editor-image">
+                    ${selectedPreviewHtml}
+                    <div class="iig-additional-ref-image-actions">
+                        <label class="menu_button iig-additional-ref-upload" title="${t`Upload image`}">
+                            <i class="fa-solid fa-upload"></i>
+                            <input type="file" accept="image/*" class="iig-additional-ref-file" style="display:none">
+                        </label>
+                        <button type="button" class="menu_button iig-additional-ref-upload-url" title="${t`Upload image by URL`}">
+                            <i class="fa-solid fa-link"></i>
+                        </button>
+                        <button type="button" class="menu_button iig-additional-ref-vision ${selectedPreviewSrc ? '' : 'iig-hidden'}" title="${t`Describe appearance via Vision AI`}">
+                            <i class="fa-solid fa-robot"></i>
+                        </button>
                     </div>
                 </div>
+                <div class="iig-additional-ref-editor-fields">
+                    <label>
+                        <span>${t`Name`}</span>
+                        <input type="text" class="text_pole iig-additional-ref-name" placeholder="${t`Reference name`}"
+                            value="${sanitizeForHtml(selectedRef.name || '')}">
+                    </label>
+                    <label>
+                        <span>${t`Description`}</span>
+                        <textarea class="text_pole iig-additional-ref-description" rows="3" placeholder="${t`Reference description`}">${sanitizeForHtml(selectedRef.description || '')}</textarea>
+                    </label>
+                    <label>
+                        <span>${t`Send`}</span>
+                        <select class="iig-additional-ref-match-mode">
+                            <option value="match" ${selectedRef.matchMode !== 'always' ? 'selected' : ''}>${t`On match`}</option>
+                            <option value="always" ${selectedRef.matchMode === 'always' ? 'selected' : ''}>${t`Always`}</option>
+                        </select>
+                    </label>
+                </div>
             </div>
-        `;
-    }).join('');
+
+            ${isPowerMode ? `
+                <details class="iig-additional-ref-editor-section">
+                    <summary><i class="fa-solid fa-code-branch"></i><span>${t`Matching rules`}</span></summary>
+                    <div class="iig-additional-ref-editor-section-body">
+                        <label class="checkbox_label" title="${t`Interpret the reference name as a JavaScript regular expression`}">
+                            <input type="checkbox" class="iig-additional-ref-regex" ${selectedRef.useRegex === true ? 'checked' : ''}>
+                            <span>${t`Use regex`}</span>
+                        </label>
+                        <label>
+                            <span>${t`Secondary keys`}</span>
+                            <input type="text" class="text_pole iig-additional-ref-secondary" placeholder="${t`AND conditions, comma-separated`}"
+                                value="${sanitizeForHtml(selectedRef.secondaryKeys || '')}">
+                        </label>
+                    </div>
+                </details>
+                <details class="iig-additional-ref-editor-section">
+                    <summary><i class="fa-solid fa-layer-group"></i><span>${t`Organization`}</span></summary>
+                    <div class="iig-additional-ref-editor-section-body iig-additional-ref-organization-grid">
+                        <label>
+                            <span>${t`Group`}</span>
+                            <input type="text" class="text_pole iig-additional-ref-group" placeholder="${t`Characters, locations, items`}"
+                                value="${sanitizeForHtml(selectedRef.group || '')}">
+                        </label>
+                        <label>
+                            <span>${t`Priority`}</span>
+                            <input type="number" class="text_pole iig-additional-ref-priority" step="1"
+                                value="${Number.isFinite(selectedRef.priority) ? selectedRef.priority : 0}"
+                                title="${t`Higher priority is matched first when provider limits references`}">
+                        </label>
+                    </div>
+                </details>` : ''}
+
+            <div class="iig-additional-ref-editor-actions">
+                ${isPowerMode ? `
+                    <button type="button" class="menu_button iig-additional-ref-move-up ${selectedIndex === 0 ? 'disabled' : ''}" title="${t`Move up`}" ${selectedIndex === 0 ? 'aria-disabled="true"' : ''}>
+                        <i class="fa-solid fa-arrow-up"></i><span>${t`Up`}</span>
+                    </button>
+                    <button type="button" class="menu_button iig-additional-ref-move-down ${selectedIndex === refs.length - 1 ? 'disabled' : ''}" title="${t`Move down`}" ${selectedIndex === refs.length - 1 ? 'aria-disabled="true"' : ''}>
+                        <i class="fa-solid fa-arrow-down"></i><span>${t`Down`}</span>
+                    </button>` : ''}
+                <button type="button" class="menu_button redWarningBG iig-additional-ref-remove">
+                    <i class="fa-solid fa-trash"></i><span>${t`Delete`}</span>
+                </button>
+            </div>
+        </div>` : `<div class="iig-library-empty iig-additional-ref-editor-empty">${t`Add a reference to start editing.`}</div>`;
+
+    return `
+        <div class="iig-additional-ref-workspace ${isPowerMode ? 'power' : 'simple'}">
+            <div class="iig-additional-ref-browser">
+                <div class="iig-additional-ref-tools">
+                    <label class="iig-additional-ref-search">
+                        <i class="fa-solid fa-magnifying-glass"></i>
+                        <input id="iig_additional_refs_search" class="text_pole" type="search" value="${sanitizeForHtml(query)}" placeholder="${t`Search references`}">
+                    </label>
+                    <select id="iig_additional_refs_filter" title="${t`Filter references`}">
+                        <option value="all" ${filter === 'all' ? 'selected' : ''}>${t`All`}</option>
+                        <option value="enabled" ${filter === 'enabled' ? 'selected' : ''}>${t`Enabled`}</option>
+                        <option value="match" ${filter === 'match' ? 'selected' : ''}>${t`On match`}</option>
+                        <option value="always" ${filter === 'always' ? 'selected' : ''}>${t`Always`}</option>
+                    </select>
+                </div>
+                <div class="iig-additional-ref-compact-list">
+                    ${listRowsHtml || `<div class="iig-library-empty">${t`Add a reference with an image, name, and description.`}</div>`}
+                </div>
+                <div id="iig_additional_refs_no_results" class="iig-library-empty iig-hidden">${t`No references match the current search.`}</div>
+            </div>
+            <div class="iig-additional-ref-editor">
+                ${editorHtml}
+            </div>
+        </div>`;
 }
 
 /**
@@ -620,7 +1030,7 @@ export function renderAdditionalReferencesStatus(providerMaxRefs = 0) {
     const status = document.getElementById('iig_additional_refs_status');
     if (!status) return;
 
-    const refs = ensureAdditionalReferencesArray().filter((ref) => String(ref?.name || '').trim() && String(ref?.imagePath || '').trim());
+    const refs = getActiveLorebookReferences().filter((ref) => String(ref?.name || '').trim() && String(ref?.imagePath || '').trim());
     const enabledRefs = refs.filter((ref) => ref.enabled !== false);
     const alwaysCount = enabledRefs.filter((ref) => ref.matchMode === 'always').length;
     const parts = [];
@@ -639,27 +1049,13 @@ export function renderAdditionalReferencesStatus(providerMaxRefs = 0) {
  * `providerMaxRefs` (optional) — лимит картинок на один запрос у активного
  * провайдера/модели.
  */
-export function renderAdditionalReferencesList(providerMaxRefs = 0) {
+export function renderAdditionalReferencesList(providerMaxRefs = 0, viewState = {}) {
     const container = document.getElementById('iig_additional_refs_list');
     if (!container) {
         return;
     }
 
-    const expandedIndices = new Set();
-    container.querySelectorAll('.iig-ref-expanded').forEach((row) => {
-        const idx = row.getAttribute('data-ref-index');
-        if (idx != null) expandedIndices.add(idx);
-    });
-
-    container.innerHTML = buildAdditionalReferenceRowsHtml();
-
-    for (const idx of expandedIndices) {
-        const row = container.querySelector(`[data-ref-index="${idx}"]`);
-        if (row && !row.classList.contains('iig-ref-expanded')) {
-            row.classList.add('iig-ref-expanded');
-        }
-    }
-
+    container.innerHTML = buildAdditionalReferenceRowsHtml(getSettings(), viewState);
     renderAdditionalReferencesStatus(providerMaxRefs);
 }
 
@@ -847,7 +1243,7 @@ export async function downloadReferenceImageFromUrl(url, meta = {}) {
 
 export async function importAdditionalReferencesFromUrls(rawValue) {
     const settings = getSettings();
-    const refs = ensureAdditionalReferencesArray(settings);
+    const refs = getActiveLorebookReferences(settings);
     const urls = normalizeReferenceUrlList(rawValue);
     if (urls.length === 0) {
         throw new Error(t`Add at least one URL`);
@@ -860,6 +1256,7 @@ export async function importAdditionalReferencesFromUrls(rawValue) {
 
     const queue = urls.slice(0, availableSlots);
     const importedNames = [];
+    const importedRefs = [];
 
     for (let index = 0; index < queue.length; index++) {
         const url = queue[index];
@@ -870,7 +1267,7 @@ export async function importAdditionalReferencesFromUrls(rawValue) {
             refName: name,
         });
 
-        refs.push({
+        importedRefs.push({
             name,
             description: '',
             imagePath,
@@ -879,6 +1276,8 @@ export async function importAdditionalReferencesFromUrls(rawValue) {
         });
         importedNames.push(name);
     }
+
+    refs.unshift(...importedRefs);
 
     saveSettings();
     renderAdditionalReferencesList();

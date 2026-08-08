@@ -23,7 +23,7 @@ import {
     getUserAvatarDataUrl,
     collectPreviousContextReferences,
 } from '../references.js';
-import { collectExtraReferences, getWardrobeAvatarOverrideBase64 } from '../extras.js';
+import { collectAvatarReferences, collectExtraReferences, mergeAvatarReferenceGroups } from '../extras.js';
 import {
     Provider,
     buildGenerationUrl,
@@ -91,16 +91,10 @@ export class OpenRouterProvider extends Provider {
         const refs = [];
 
         // Референсы в формате dataUrl (OpenRouter принимает base64 data URL в image_url.url).
-        if (settings.sendCharAvatar) {
-            const override = await getWardrobeAvatarOverrideBase64('bot');
-            const d = override ? `data:image/png;base64,${override}` : await getCharacterAvatarDataUrl();
-            if (d) refs.push(d);
-        }
-        if (settings.sendUserAvatar) {
-            const override = await getWardrobeAvatarOverrideBase64('user');
-            const d = override ? `data:image/png;base64,${override}` : await getUserAvatarDataUrl();
-            if (d) refs.push(d);
-        }
+        const avatarGroups = [];
+        if (settings.sendCharAvatar) avatarGroups.push(await collectAvatarReferences('bot', 'dataUrl', prompt));
+        if (settings.sendUserAvatar) avatarGroups.push(await collectAvatarReferences('user', 'dataUrl', prompt));
+        refs.push(...mergeAvatarReferenceGroups(avatarGroups, maxRefs));
 
         for (const extra of await collectExtraReferences(prompt, 'dataUrl')) {
             if (refs.length >= maxRefs) break;

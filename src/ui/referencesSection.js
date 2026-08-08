@@ -51,6 +51,7 @@ import { generateReferenceDescription } from '../vision.js';
 import { t } from '../i18n.js';
 import { Popup } from '../../../../../popup.js';
 import { buildSettingsSectionHtml } from './common.js';
+import { buildCharacterLibraryBodyHtml } from '../characterLibraryUi.js';
 
 // ----- HTML -----
 
@@ -84,23 +85,12 @@ function buildAvatarReferencesBlockHtml({
             <h4>${title}</h4>
             <label class="checkbox_label">
                 <input type="checkbox" id="${sendCharCheckboxId}" ${sendCharEnabled ? 'checked' : ''}>
-                <span>${t`Send {{char}} avatar`}</span>
+                <span>${t`Send character avatar`}</span>
             </label>
             <label class="checkbox_label">
                 <input type="checkbox" id="${sendUserCheckboxId}" ${sendUserEnabled ? 'checked' : ''}>
-                <span>${t`Send {{user}} avatar`}</span>
+                <span>${t`Send persona avatar`}</span>
             </label>
-            <label id="${useActivePersonaRowId}" class="checkbox_label ${useActivePersonaRowHidden ? useActivePersonaHiddenClass : ''}">
-                <input type="checkbox" id="${useActivePersonaCheckboxId}" ${useActivePersonaEnabled ? 'checked' : ''}>
-                <span>${t`Use avatar from active {{user}} persona`}</span>
-            </label>
-            <div id="${userAvatarRowId}" class="flex-row ${userAvatarRowHidden ? userAvatarRowHiddenClass : ''}">
-                <label>${t`{{user}} avatar`}</label>
-                ${userAvatarDropdownHtml}
-                <div id="${refreshButtonId}" class="menu_button iig-refresh-btn" title="${t`Refresh list`}">
-                    <i class="fa-solid fa-sync"></i>
-                </div>
-            </div>
         </div>
     `;
 }
@@ -228,7 +218,13 @@ export function buildReferencesSettingsSectionHtml(settings = getSettings()) {
         ${geminiAvatarsBlock}
         ${naisteraAvatarsBlock}
 
-        <div class="iig-settings-card-nested" id="iig_avatar_library_block">
+        <div id="iig_characters_section" class="iig-settings-card-nested">
+            <h4>${t`Character library`}</h4>
+            <p class="hint">${t`Manage the main appearance, additional image references, text descriptions, and generation history for every character and persona.`}</p>
+            ${buildCharacterLibraryBodyHtml()}
+        </div>
+
+        <div class="iig-settings-card-nested iig-hidden" id="iig_avatar_library_block">
             <h4>${t`Custom avatar library`}</h4>
             <p class="hint">${t`Active item replaces the default avatar (from character card / user persona) wherever a reference is sent. Add an appearance description (manually or via Vision AI) to also inject it into prompts.`}</p>
 
@@ -304,6 +300,14 @@ export function buildReferencesSettingsSectionHtml(settings = getSettings()) {
 
             <div id="iig_open_wardrobe_modal" class="menu_button iig-button-inline" style="width: 100%; margin-bottom: 12px;">
                 <i class="fa-solid fa-shirt"></i> ${t`Open Wardrobe`}
+            </div>
+
+            <div class="iig-wardrobe-match-setting">
+                <label class="checkbox_label">
+                    <input type="checkbox" id="iig_optional_wardrobe_sending" ${settings.optionalWardrobeSending === true ? 'checked' : ''}>
+                    <span>${t`Send outfits only on alias match`}</span>
+                </label>
+                <p class="hint">${t`Uses the avatar match keys of the outfit owner. Character and persona outfit references and image-prompt descriptions are sent only when one of their aliases appears in the image prompt.`}</p>
             </div>
 
             <div class="iig-wardrobe-inject-row">
@@ -646,17 +650,77 @@ export function bindLorebookBarEvents(settings) {
 
 // ----- Additional references events -----
 
+let selectedAdditionalReferenceId = '';
+let additionalReferenceSearchQuery = '';
+let additionalReferenceFilter = 'all';
+
+function getAdditionalReferenceIndex(element) {
+    const container = element?.closest?.('[data-ref-index]');
+    const index = Number.parseInt(String(container?.getAttribute('data-ref-index') || ''), 10);
+    return Number.isInteger(index) ? index : -1;
+}
+
+function filterAdditionalReferenceRows() {
+    const query = additionalReferenceSearchQuery.trim().toLowerCase();
+    const rows = [...document.querySelectorAll('.iig-additional-ref-list-row')];
+    let visibleCount = 0;
+    for (const row of rows) {
+        const matchesQuery = !query || String(row.getAttribute('data-ref-search') || '').includes(query);
+        const matchesFilter = additionalReferenceFilter === 'all'
+            || (additionalReferenceFilter === 'enabled' && row.getAttribute('data-ref-enabled') === 'true')
+            || row.getAttribute('data-ref-match-mode') === additionalReferenceFilter;
+        const visible = matchesQuery && matchesFilter;
+        row.classList.toggle('iig-hidden', !visible);
+        if (visible) visibleCount += 1;
+    }
+    document.getElementById('iig_additional_refs_no_results')?.classList.toggle('iig-hidden', rows.length === 0 || visibleCount > 0);
+}
+
+function updateAdditionalReferenceListPreview(ref) {
+    const row = [...document.querySelectorAll('.iig-additional-ref-list-row')]
+        .find((item) => item.getAttribute('data-ref-id') === ref.id);
+    if (!row) return;
+    const title = String(ref.name || '').trim() || t`Untitled reference`;
+    const description = String(ref.description || '').replace(/\s+/g, ' ').trim() || t`No description`;
+    const titleElement = row.querySelector('.iig-additional-ref-list-copy strong');
+    const descriptionElement = row.querySelector('.iig-additional-ref-list-copy small');
+    if (titleElement) titleElement.textContent = title;
+    if (descriptionElement) descriptionElement.textContent = description;
+    row.setAttribute('data-ref-search', `${ref.name || ''} ${ref.description || ''} ${ref.group || ''}`.toLowerCase());
+    const editorTitle = document.querySelector('.iig-additional-ref-editor-heading strong');
+    if (editorTitle) editorTitle.textContent = title;
+    filterAdditionalReferenceRows();
+}
+
 /**
  * Обёртка над `renderAdditionalReferencesList`, пробрасывающая текущий
  * provider-лимит референсов. Нужна чтобы references.js не зависел от
  * providers.js (иначе ESM-цикл).
  */
 export function refreshAdditionalReferencesList() {
-    const maxRefs = getActiveProviderMaxReferences(getSettings());
-    renderAdditionalReferencesList(maxRefs);
+    const settings = getSettings();
+    const refs = ensureAdditionalReferencesArray(settings);
+    if (!refs.some((ref) => ref.id === selectedAdditionalReferenceId)) {
+        selectedAdditionalReferenceId = refs[0]?.id || '';
+    }
+    renderAdditionalReferencesList(getActiveProviderMaxReferences(settings), {
+        selectedId: selectedAdditionalReferenceId,
+        query: additionalReferenceSearchQuery,
+        filter: additionalReferenceFilter,
+    });
+    filterAdditionalReferenceRows();
 }
 
 export function bindAdditionalReferencesEvents(settings) {
+    document.querySelectorAll('input[name="iig_additional_refs_mode"]').forEach((input) => {
+        input.addEventListener('change', (e) => {
+            if (!(e.target instanceof HTMLInputElement) || !e.target.checked) return;
+            settings.additionalReferencesMode = e.target.value === 'power' ? 'power' : 'simple';
+            saveSettings();
+            refreshAdditionalReferencesList();
+        });
+    });
+
     document.getElementById('iig_additional_refs_add')?.addEventListener('click', () => {
         const refs = ensureAdditionalReferencesArray(settings);
         if (refs.length >= MAX_ADDITIONAL_REFERENCES) {
@@ -664,7 +728,7 @@ export function bindAdditionalReferencesEvents(settings) {
             return;
         }
 
-        refs.push({
+        refs.unshift({
             name: '',
             description: '',
             imagePath: '',
@@ -675,6 +739,7 @@ export function bindAdditionalReferencesEvents(settings) {
             useRegex: false,
             secondaryKeys: '',
         });
+        selectedAdditionalReferenceId = ensureAdditionalReferencesArray(settings)[0]?.id || '';
         saveSettings();
         refreshAdditionalReferencesList();
     });
@@ -702,6 +767,7 @@ export function bindAdditionalReferencesEvents(settings) {
         try {
             const result = await importAdditionalReferencesFromUrls(input.value);
             closeReferenceImportModal();
+            refreshAdditionalReferencesList();
             const tail = result.skippedCount > 0 ? t`, skipped: ${result.skippedCount}` : '';
             toastr.success(t`Imported: ${result.importedCount}` + tail, t`Image Generation`);
         } catch (error) {
@@ -728,6 +794,12 @@ export function bindAdditionalReferencesEvents(settings) {
             return;
         }
 
+        if (target.id === 'iig_additional_refs_search') {
+            additionalReferenceSearchQuery = target.value;
+            filterAdditionalReferenceRows();
+            return;
+        }
+
         const isNameField = target.classList.contains('iig-additional-ref-name');
         const isDescriptionField = target.classList.contains('iig-additional-ref-description');
         const isGroupField = target.classList.contains('iig-additional-ref-group');
@@ -737,25 +809,15 @@ export function bindAdditionalReferencesEvents(settings) {
             return;
         }
 
-        const row = target.closest('.iig-additional-ref-row');
-        const index = Number.parseInt(String(row?.getAttribute('data-ref-index') || ''), 10);
-        if (!Number.isInteger(index)) {
-            return;
-        }
+        const index = getAdditionalReferenceIndex(target);
+        if (index < 0) return;
 
         const refs = ensureAdditionalReferencesArray(settings);
         if (!refs[index]) {
             return;
         }
 
-        if (isNameField) {
-            refs[index].name = target.value;
-            const sn = row?.querySelector('.iig-ref-summary-name');
-            if (sn) {
-                sn.textContent = target.value.trim() || t`Unnamed reference`;
-                sn.classList.toggle('iig-ref-summary-name-empty', !target.value.trim());
-            }
-        }
+        if (isNameField) refs[index].name = target.value;
         if (isDescriptionField) refs[index].description = target.value;
         if (isGroupField) refs[index].group = target.value;
         if (isSecondaryField) refs[index].secondaryKeys = target.value;
@@ -764,6 +826,7 @@ export function bindAdditionalReferencesEvents(settings) {
             refs[index].priority = Number.isFinite(parsed) ? parsed : 0;
         }
         saveSettings();
+        updateAdditionalReferenceListPreview(refs[index]);
         // Обновляем только статус (ссылок на provider-limit warning), не
         // ре-рендерим карточки — иначе слетает фокус.
         renderAdditionalReferencesStatus(getActiveProviderMaxReferences(settings));
@@ -771,12 +834,14 @@ export function bindAdditionalReferencesEvents(settings) {
 
     document.getElementById('iig_additional_refs_list')?.addEventListener('change', async (e) => {
         const target = e.target;
+        if (target instanceof HTMLSelectElement && target.id === 'iig_additional_refs_filter') {
+            additionalReferenceFilter = ['enabled', 'match', 'always'].includes(target.value) ? target.value : 'all';
+            filterAdditionalReferenceRows();
+            return;
+        }
         if (target instanceof HTMLInputElement && target.classList.contains('iig-additional-ref-enabled')) {
-            const row = target.closest('.iig-additional-ref-row');
-            const index = Number.parseInt(String(row?.getAttribute('data-ref-index') || ''), 10);
-            if (!Number.isInteger(index)) {
-                return;
-            }
+            const index = getAdditionalReferenceIndex(target);
+            if (index < 0) return;
 
             const refs = ensureAdditionalReferencesArray(settings);
             if (!refs[index]) {
@@ -789,13 +854,32 @@ export function bindAdditionalReferencesEvents(settings) {
             return;
         }
 
+        if (target instanceof HTMLSelectElement && target.classList.contains('iig-additional-ref-match-mode')) {
+            const index = getAdditionalReferenceIndex(target);
+            const refs = ensureAdditionalReferencesArray(settings);
+            if (index < 0 || !refs[index]) return;
+            refs[index].matchMode = target.value === 'always' ? 'always' : 'match';
+            saveSettings();
+            refreshAdditionalReferencesList();
+            return;
+        }
+
+        if (target instanceof HTMLInputElement && target.classList.contains('iig-additional-ref-regex')) {
+            const index = getAdditionalReferenceIndex(target);
+            const refs = ensureAdditionalReferencesArray(settings);
+            if (index < 0 || !refs[index]) return;
+            refs[index].useRegex = target.checked;
+            saveSettings();
+            refreshAdditionalReferencesList();
+            return;
+        }
+
         if (!(target instanceof HTMLInputElement) || !target.classList.contains('iig-additional-ref-file')) {
             return;
         }
 
-        const row = target.closest('.iig-additional-ref-row');
-        const index = Number.parseInt(String(row?.getAttribute('data-ref-index') || ''), 10);
-        if (!Number.isInteger(index)) {
+        const index = getAdditionalReferenceIndex(target);
+        if (index < 0) {
             target.value = '';
             return;
         }
@@ -836,35 +920,14 @@ export function bindAdditionalReferencesEvents(settings) {
         }
     });
 
-    document.getElementById('iig_additional_refs_list')?.addEventListener('change', (e) => {
-        const target = e.target;
-        if (!(target instanceof HTMLInputElement)) return;
-
-        const isAlways = target.classList.contains('iig-additional-ref-always');
-        const isRegex = target.classList.contains('iig-additional-ref-regex');
-        if (!isAlways && !isRegex) return;
-
-        const row = target.closest('.iig-additional-ref-row');
-        const index = Number.parseInt(String(row?.getAttribute('data-ref-index') || ''), 10);
-        if (!Number.isInteger(index)) return;
-
-        const refs = ensureAdditionalReferencesArray(settings);
-        if (!refs[index]) return;
-
-        if (isAlways) refs[index].matchMode = target.checked ? 'always' : 'match';
-        if (isRegex) refs[index].useRegex = target.checked;
-        saveSettings();
-        refreshAdditionalReferencesList();
-    });
-
     document.getElementById('iig_additional_refs_list')?.addEventListener('click', async (e) => {
         const target = e.target instanceof Element ? e.target : null;
         if (!target) return;
 
-        const toggleSummary = target.closest('[data-ref-toggle]');
-        if (toggleSummary && !target.closest('.iig-ref-summary-enabled')) {
-            const row = toggleSummary.closest('.iig-additional-ref-row');
-            if (row) row.classList.toggle('iig-ref-expanded');
+        const selectButton = target.closest('[data-ref-select]');
+        if (selectButton) {
+            selectedAdditionalReferenceId = String(selectButton.getAttribute('data-ref-select') || '');
+            refreshAdditionalReferencesList();
             return;
         }
 
@@ -876,9 +939,8 @@ export function bindAdditionalReferencesEvents(settings) {
         const button = urlBtn || removeBtn || upBtn || downBtn || visionBtn;
         if (!button) return;
 
-        const row = button.closest('.iig-additional-ref-row');
-        const index = Number.parseInt(String(row?.getAttribute('data-ref-index') || ''), 10);
-        if (!Number.isInteger(index)) return;
+        const index = getAdditionalReferenceIndex(button);
+        if (index < 0) return;
 
         const refs = ensureAdditionalReferencesArray(settings);
 
@@ -890,8 +952,9 @@ export function bindAdditionalReferencesEvents(settings) {
             visionBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
             try {
                 const description = await generateReferenceDescription(refId);
-                const descInput = row?.querySelector('.iig-additional-ref-description');
+                const descInput = document.querySelector('.iig-additional-ref-editor-content .iig-additional-ref-description');
                 if (descInput instanceof HTMLTextAreaElement) descInput.value = description;
+                updateAdditionalReferenceListPreview(refs[index]);
                 toastr.success(t`Description generated`, t`Image Generation`);
             } catch (error) {
                 toastr.error(t`Vision generation error: ${error.message || error}`, t`Image Generation`);
@@ -932,6 +995,7 @@ export function bindAdditionalReferencesEvents(settings) {
             );
             if (!confirmed) return;
             refs.splice(index, 1);
+            selectedAdditionalReferenceId = refs[index]?.id || refs[index - 1]?.id || '';
         } else if (upBtn && index > 0) {
             [refs[index - 1], refs[index]] = [refs[index], refs[index - 1]];
         } else if (downBtn && index < refs.length - 1) {

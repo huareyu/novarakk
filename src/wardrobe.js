@@ -676,9 +676,47 @@ function swBuildTryOnPrompt(side, outfitDesc, { fromDescription = false } = {}) 
 
 function swCropGeneratedImage(base64) {
     return new Promise((resolve) => {
-        document.getElementById('sw-crop-overlay')?.remove();
+        const existingOverlay = document.getElementById('sw-crop-overlay');
+        if (typeof existingOverlay?._swCropCancel === 'function') existingOverlay._swCropCancel();
+        else existingOverlay?.remove();
         const overlay = document.createElement('div');
         overlay.id = 'sw-crop-overlay';
+        // Do not lock document.body here. Mobile Safari may clip fixed children of a
+        // body with overflow:hidden, which made the cropper exist but stay invisible.
+        const formBody = document.querySelector('#sw-form .sw-form-body');
+        const previousFormOverflow = formBody?.style.overflow || '';
+        if (formBody) formBody.style.overflow = 'hidden';
+        const formOverlay = document.getElementById('sw-form-overlay');
+        const formPanel = formOverlay?.querySelector('#sw-form');
+        const previousPanelVisibility = formPanel?.style.visibility || '';
+        if (formPanel) formPanel.style.visibility = 'hidden';
+        // Keep the cropper in the same stacking context as the already visible
+        // wardrobe modal. This is required by iOS/WebKit when ST itself is shown
+        // inside a transformed or top-layer container.
+        Object.assign(overlay.style, {
+            position: 'fixed',
+            inset: 'auto',
+            top: '0px',
+            left: '0px',
+            zIndex: '2147483647',
+            display: 'flex',
+            visibility: 'visible',
+            opacity: '1',
+            pointerEvents: 'auto',
+            background: '#070707',
+        });
+        const fitCropToViewport = () => {
+            const viewport = window.visualViewport;
+            const width = Math.max(viewport?.width || 0, window.innerWidth || 0, document.documentElement.clientWidth || 0);
+            const height = Math.max(viewport?.height || 0, window.innerHeight || 0, document.documentElement.clientHeight || 0);
+            overlay.style.width = `${Math.max(1, Math.round(width))}px`;
+            overlay.style.height = `${Math.max(1, Math.round(height))}px`;
+            overlay.style.maxWidth = 'none';
+            overlay.style.maxHeight = 'none';
+        };
+        fitCropToViewport();
+        window.addEventListener('resize', fitCropToViewport);
+        window.visualViewport?.addEventListener('resize', fitCropToViewport);
         overlay.innerHTML = `
             <div id="sw-crop-panel" role="dialog" aria-modal="true" aria-label="Кадрирование изображения">
                 <div class="sw-crop-header"><strong><i class="fa-solid fa-crop-simple"></i> Кадрирование</strong><button type="button" class="sw-crop-close" title="Закрыть"><i class="fa-solid fa-xmark"></i></button></div>
@@ -692,10 +730,14 @@ function swCropGeneratedImage(base64) {
                 </div>
                 <div class="sw-crop-actions"><button type="button" class="sw-crop-cancel">Отмена</button><button type="button" class="sw-crop-apply"><i class="fa-solid fa-check"></i> Применить</button></div>
             </div>`;
-        document.body.appendChild(overlay);
+        (formOverlay || document.body).appendChild(overlay);
 
         const image = overlay.querySelector('.sw-crop-image-wrap img');
         const box = overlay.querySelector('.sw-crop-box');
+        const openedAt = performance.now();
+        // Some mobile WebViews emit a delayed synthetic click after the tap that
+        // opened the cropper. It lands on the freshly mounted Cancel/background.
+        const acceptsUserInput = () => performance.now() - openedAt > 700;
         let state = { x: 0, y: 0, w: 0, h: 0 };
         let lastSize = null;
         let finished = false;
@@ -728,8 +770,20 @@ function swCropGeneratedImage(base64) {
             finished = true;
             resizeObserver?.disconnect();
             document.removeEventListener('keydown', onKeyDown, true);
+            window.removeEventListener('resize', fitCropToViewport);
+            window.visualViewport?.removeEventListener('resize', fitCropToViewport);
+            if (formBody?.isConnected) formBody.style.overflow = previousFormOverflow;
+            if (formPanel?.isConnected) formPanel.style.visibility = previousPanelVisibility;
             overlay.remove();
             resolve(value);
+        };
+        const cancelFromUser = (reason) => {
+            if (!acceptsUserInput()) {
+                iigLog('INFO', `Wardrobe crop ignored early mobile click: ${reason}`);
+                return;
+            }
+            iigLog('INFO', `Wardrobe crop cancelled: ${reason}`);
+            finish(null);
         };
         overlay._swCropCancel = () => finish(null);
         const onKeyDown = (event) => {
@@ -738,12 +792,17 @@ function swCropGeneratedImage(base64) {
             finish(null);
         };
         document.addEventListener('keydown', onKeyDown, true);
-        overlay.addEventListener('click', (event) => { if (event.target === overlay) finish(null); });
-        overlay.querySelector('.sw-crop-close').addEventListener('click', () => finish(null));
-        overlay.querySelector('.sw-crop-cancel').addEventListener('click', () => finish(null));
+        // Never let mobile synthetic events escape into #sw-form-overlay: its
+        // backdrop handler would tear down this cropper and reveal the form.
+        overlay.addEventListener('click', (event) => event.stopPropagation());
+        overlay.addEventListener('pointerup', (event) => event.stopPropagation());
+        overlay.addEventListener('touchend', (event) => event.stopPropagation(), { passive: true });
+        overlay.querySelector('.sw-crop-close').addEventListener('click', () => cancelFromUser('close'));
+        overlay.querySelector('.sw-crop-cancel').addEventListener('click', () => cancelFromUser('cancel'));
 
         for (const button of overlay.querySelectorAll('.sw-crop-ratios button')) {
             button.addEventListener('click', () => {
+                if (!acceptsUserInput()) return;
                 overlay.querySelectorAll('.sw-crop-ratios button').forEach((item) => item.classList.toggle('selected', item === button));
                 const ratio = Number(button.dataset.ratio);
                 if (Number.isFinite(ratio)) fitRatio(ratio);
@@ -751,6 +810,7 @@ function swCropGeneratedImage(base64) {
         }
 
         box.addEventListener('pointerdown', (event) => {
+            if (!acceptsUserInput()) return;
             event.preventDefault(); event.stopPropagation();
             const handle = event.target?.dataset?.handle || 'move';
             const start = {
@@ -794,6 +854,7 @@ function swCropGeneratedImage(base64) {
         });
 
         overlay.querySelector('.sw-crop-apply').addEventListener('click', () => {
+            if (!acceptsUserInput()) return;
             const current = size();
             if (!current.w || !current.h || state.w < 2 || state.h < 2) return;
             const scaleX = image.naturalWidth / current.w;
@@ -827,6 +888,10 @@ function swCropGeneratedImage(base64) {
             initSelection();
             resizeObserver?.observe(image);
         }, { once: true });
+        requestAnimationFrame(() => {
+            const rect = overlay.getBoundingClientRect();
+            iigLog('INFO', `Wardrobe crop overlay mounted: connected=${overlay.isConnected} size=${Math.round(rect.width)}x${Math.round(rect.height)}`);
+        });
         image.src = `data:image/png;base64,${base64}`;
     });
 }
@@ -1179,7 +1244,9 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
     const userNm = stCtx.name1 || 'персона';
 
     const ov = document.createElement('div'); ov.id = 'sw-form-overlay';
-    ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+    ov.addEventListener('click', (e) => {
+        if (e.target === ov && !ov.querySelector('#sw-crop-overlay')) close();
+    });
     const panel = document.createElement('div'); panel.id = 'sw-form';
     if (isBuild) panel.classList.add('sw-form-build');
     panel.innerHTML = `
@@ -1328,15 +1395,18 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         o.addEventListener('click', () => { picked = o.dataset.pick === 'gen' ? 'gen' : 'orig'; refreshTryOnUI(); });
     }
 
-    panel.querySelector('#sw-generated-crop').addEventListener('click', async (event) => {
-        const button = event.currentTarget;
+    const cropButton = panel.querySelector('#sw-generated-crop');
+    const openCrop = async (event) => {
+        if (event.cancelable) event.preventDefault();
+        event.stopPropagation();
+        const button = cropButton;
         if (button.disabled) return;
         button.disabled = true;
         try {
             const editingGenerated = picked === 'gen' && !!genB64;
             const currentB64 = editingGenerated ? genB64 : await getFormImageB64();
             if (!currentB64) throw new Error('нет картинки для кадрирования');
-            iigLog('INFO', `Wardrobe crop opened: source=${editingGenerated ? 'generated' : 'uploaded'} base64Length=${currentB64.length}`);
+            iigLog('INFO', `Wardrobe crop opened: event=${event.type} source=${editingGenerated ? 'generated' : 'uploaded'} base64Length=${currentB64.length}`);
             const cropped = await swCropGeneratedImage(currentB64);
             if (!cropped || !document.body.contains(panel)) return;
             if (editingGenerated) {
@@ -1356,7 +1426,12 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
         } finally {
             if (document.body.contains(panel)) button.disabled = false;
         }
-    });
+    };
+    // Safari/WebView must be handled on touchend. Waiting for its synthesized
+    // click lets the modal/navigation layer consume the gesture first.
+    cropButton.addEventListener('touchstart', event => event.stopPropagation(), { passive: true });
+    cropButton.addEventListener('touchend', openCrop, { passive: false });
+    cropButton.addEventListener('click', openCrop);
 
     panel.querySelector('#sw-generated-download').addEventListener('click', async (event) => {
         const button = event.currentTarget;

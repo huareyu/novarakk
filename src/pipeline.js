@@ -175,7 +175,7 @@ function formatProviderError(error) {
  * reference images — OpenAI / ElectronHub (/v1/images/edits), Gemini,
  * OpenRouter, Naistera.
  */
-const REF_INSTRUCTION_PROVIDERS = new Set(['openai', 'electronhub', 'gemini', 'openrouter', 'naistera', 'problembo']);
+const REF_INSTRUCTION_PROVIDERS = new Set(['openai', 'electronhub', 'gemini', 'openrouter', 'naistera', 'problembo', 'novelai']);
 
 /**
  * Приводит любой представление референса (base64 строка или data URL)
@@ -207,7 +207,7 @@ function buildRequestSnapshot({ prompt, style, references, matchedAdditionalRefs
     const model = settings.apiType === 'naistera'
         ? normalizeNaisteraModel(settings.naisteraModel)
         : settings.apiType === 'novelai'
-            ? (settings.novelaiModel || '')
+            ? (settings.novelaiModel === '__custom__' ? (settings.novelaiCustomModel || '') : (settings.novelaiModel || ''))
             : (settings.model || '');
 
     const aspectRatio = settings.apiType === 'naistera'

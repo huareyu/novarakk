@@ -24,6 +24,11 @@ import {
     loadConnectionProfile,
     renameConnectionProfile,
     removeConnectionProfile,
+    ensureNovelaiNegativePresets,
+    createNovelaiNegativePreset,
+    getActiveNovelaiNegativePreset,
+    updateNovelaiNegativePreset,
+    removeNovelaiNegativePreset,
 } from '../settings.js';
 import { sanitizeForHtml } from '../utils.js';
 import {
@@ -38,6 +43,59 @@ import { buildSettingsSectionHtml } from './common.js';
 import { novelaiPresetSection } from './presets.js';
 
 // ----- HTML -----
+
+function buildNovelaiNegativePresetBlockHtml(settings) {
+    const presets = ensureNovelaiNegativePresets(settings);
+    const active = getActiveNovelaiNegativePreset(settings);
+    const options = presets.map((preset) =>
+        `<option value="${sanitizeForHtml(preset.id)}" ${preset.id === settings.activeNovelaiNegativePresetId ? 'selected' : ''}>${sanitizeForHtml(preset.name)}</option>`,
+    ).join('');
+
+    return `
+        <div class="iig-settings-card-nested" id="iig_novelai_negative_presets">
+            <h5>${t`NovelAI negative presets`}</h5>
+            <div class="flex-row">
+                <label for="iig_novelai_negative_preset_select">${t`Preset`}</label>
+                <select id="iig_novelai_negative_preset_select" class="flex1">
+                    ${options || `<option value="">${t`(no presets)`}</option>`}
+                </select>
+                <div></div>
+            </div>
+            <div class="flex-row">
+                <label for="iig_novelai_negative_preset_name">${t`Preset name`}</label>
+                <input type="text" id="iig_novelai_negative_preset_name" class="text_pole flex1" value="${sanitizeForHtml(active?.name || '')}" placeholder="${t`Preset name`}">
+                <div></div>
+            </div>
+            <div class="flex-col" style="margin-top: 8px;">
+                <label for="iig_novelai_negative_prompt">${t`Negative prompt`}</label>
+                <textarea id="iig_novelai_negative_prompt" class="text_pole iig-settings-textarea" rows="4" placeholder="${t`Things to avoid in the image`}">${sanitizeForHtml(settings.novelaiNegativePrompt || '')}</textarea>
+            </div>
+            <div class="iig-debug-actions" style="margin-top: 8px;">
+                <div id="iig_novelai_negative_preset_new" class="menu_button iig-button-inline"><i class="fa-solid fa-plus"></i> ${t`New`}</div>
+                <div id="iig_novelai_negative_preset_save" class="menu_button iig-button-inline ${active ? '' : 'disabled'}"><i class="fa-solid fa-floppy-disk"></i> ${t`Save`}</div>
+                <div id="iig_novelai_negative_preset_delete" class="menu_button iig-button-inline ${active ? '' : 'disabled'}"><i class="fa-solid fa-trash"></i> ${t`Delete`}</div>
+            </div>
+            <p class="hint">${t`These presets are used only by the NovelAI provider.`}</p>
+        </div>`;
+}
+
+function syncNovelaiNegativePresetControls(settings) {
+    const presets = ensureNovelaiNegativePresets(settings);
+    const active = getActiveNovelaiNegativePreset(settings);
+    const select = document.getElementById('iig_novelai_negative_preset_select');
+    const nameInput = document.getElementById('iig_novelai_negative_preset_name');
+    const promptInput = document.getElementById('iig_novelai_negative_prompt');
+    if (select) {
+        select.innerHTML = presets.length
+            ? presets.map((preset) => `<option value="${sanitizeForHtml(preset.id)}">${sanitizeForHtml(preset.name)}</option>`).join('')
+            : `<option value="">${t`(no presets)`}</option>`;
+        select.value = active?.id || '';
+    }
+    if (nameInput) nameInput.value = active?.name || '';
+    if (promptInput) promptInput.value = settings.novelaiNegativePrompt || '';
+    document.getElementById('iig_novelai_negative_preset_save')?.classList.toggle('disabled', !active);
+    document.getElementById('iig_novelai_negative_preset_delete')?.classList.toggle('disabled', !active);
+}
 
 function buildConnectionProfilesBlockHtml(settings = getSettings()) {
     const profiles = ensureConnectionProfiles(settings);
@@ -319,6 +377,12 @@ export function buildApiSettingsSectionHtml(settings = getSettings()) {
                     <div></div>
                 </div>
 
+                <div class="flex-row ${settings.novelaiModel === '__custom__' ? '' : 'iig-hidden'}" id="iig_novelai_custom_model_row">
+                    <label for="iig_novelai_custom_model">${t`Custom model ID`}</label>
+                    <input type="text" id="iig_novelai_custom_model" class="text_pole flex1" value="${sanitizeForHtml(settings.novelaiCustomModel || '')}" placeholder="nai-diffusion-5-...">
+                    <div></div>
+                </div>
+
                 <div class="flex-row">
                     <label for="iig_novelai_sampler">${t`Sampler`}</label>
                     <select id="iig_novelai_sampler" class="flex1">
@@ -355,10 +419,7 @@ export function buildApiSettingsSectionHtml(settings = getSettings()) {
                     <div></div>
                 </div>
 
-                <div class="flex-col" style="margin-top: 8px;">
-                    <label for="iig_novelai_negative_prompt">${t`Negative prompt`}</label>
-                    <textarea id="iig_novelai_negative_prompt" class="text_pole iig-settings-textarea" rows="2" placeholder="${t`Things to avoid in the image`}">${sanitizeForHtml(settings.novelaiNegativePrompt || '')}</textarea>
-                </div>
+                ${buildNovelaiNegativePresetBlockHtml(settings)}
 
                 <label class="checkbox_label" style="margin-top: 8px;" title="${t`Automatically adjust parameters to ensure free image generation (Opus tier). Max 1024x1024 px, max 28 steps.`}">
                     <input type="checkbox" id="iig_novelai_anlas_guard" ${settings.novelaiAnlasGuard ? 'checked' : ''}>
@@ -369,6 +430,35 @@ export function buildApiSettingsSectionHtml(settings = getSettings()) {
                     <input type="checkbox" id="iig_novelai_decrisper" ${settings.novelaiDecrisper ? 'checked' : ''}>
                     <span>${t`Decrisper (dynamic thresholding)`}</span>
                 </label>
+
+                <label class="checkbox_label" style="margin-top: 8px;" title="${t`When disabled, NovelAI receives no images and all reference tabs are hidden.`}">
+                    <input type="checkbox" id="iig_novelai_enable_references" ${settings.novelaiEnableReferences !== false ? 'checked' : ''}>
+                    <span>${t`Send references to NovelAI`}</span>
+                </label>
+
+                <div class="flex-row">
+                    <label for="iig_novelai_reference_type">${t`Reference type`}</label>
+                    <select id="iig_novelai_reference_type" class="flex1">
+                        <option value="character" ${settings.novelaiReferenceType === 'character' ? 'selected' : ''}>${t`Character`}</option>
+                        <option value="style" ${settings.novelaiReferenceType === 'style' ? 'selected' : ''}>${t`Style`}</option>
+                        <option value="character&style" ${settings.novelaiReferenceType === 'character&style' ? 'selected' : ''}>${t`Character and style`}</option>
+                    </select>
+                    <div></div>
+                </div>
+
+                <div class="flex-row">
+                    <label for="iig_novelai_reference_strength">${t`Reference strength`}</label>
+                    <input type="number" id="iig_novelai_reference_strength" class="text_pole flex1" min="-1" max="1" step="0.05" value="${settings.novelaiReferenceStrength ?? 1}">
+                    <div></div>
+                </div>
+
+                <div class="flex-row">
+                    <label for="iig_novelai_reference_fidelity">${t`Reference fidelity`}</label>
+                    <input type="number" id="iig_novelai_reference_fidelity" class="text_pole flex1" min="-1" max="1" step="0.05" value="${settings.novelaiReferenceFidelity ?? 0.75}">
+                    <div></div>
+                </div>
+
+                <p class="hint">${t`NovelAI Precise Reference is officially available for V4.5. Each reference adds Anlas cost; multiple character references may blend together.`}</p>
 
                 <label class="checkbox_label">
                     <input type="checkbox" id="iig_novelai_variety_boost" ${settings.novelaiVarietyBoost ? 'checked' : ''}>
@@ -499,6 +589,7 @@ function applyProfileValuesToInputs(settings) {
     setChk('iig_problembo_enable_references', settings.problemboEnableReferences !== false);
     // NovelAI fields
     setVal('iig_novelai_model', settings.novelaiModel);
+    setVal('iig_novelai_custom_model', settings.novelaiCustomModel);
     setVal('iig_novelai_sampler', settings.novelaiSampler);
     setVal('iig_novelai_scheduler', settings.novelaiScheduler);
     setVal('iig_novelai_steps', settings.novelaiSteps);
@@ -510,6 +601,11 @@ function applyProfileValuesToInputs(settings) {
     setChk('iig_novelai_variety_boost', settings.novelaiVarietyBoost);
     setChk('iig_novelai_sm', settings.novelaiSm);
     setChk('iig_novelai_sm_dyn', settings.novelaiSmDyn);
+    setChk('iig_novelai_enable_references', settings.novelaiEnableReferences !== false);
+    setVal('iig_novelai_reference_type', settings.novelaiReferenceType);
+    setVal('iig_novelai_reference_strength', settings.novelaiReferenceStrength);
+    setVal('iig_novelai_reference_fidelity', settings.novelaiReferenceFidelity);
+    syncNovelaiNegativePresetControls(settings);
 
     // Re-render presets list (it's data-driven, not simple value sync).
     novelaiPresetSection.render();
@@ -910,6 +1006,12 @@ export function bindApiSectionEvents(settings, updateVisibility) {
     document.getElementById('iig_novelai_model')?.addEventListener('change', (e) => {
         settings.novelaiModel = e.target.value;
         saveSettings();
+        updateVisibility();
+    });
+
+    document.getElementById('iig_novelai_custom_model')?.addEventListener('input', (e) => {
+        settings.novelaiCustomModel = e.target.value;
+        saveSettings();
     });
 
     document.getElementById('iig_novelai_sampler')?.addEventListener('change', (e) => {
@@ -944,6 +1046,49 @@ export function bindApiSectionEvents(settings, updateVisibility) {
         saveSettings();
     });
 
+    document.getElementById('iig_novelai_negative_preset_select')?.addEventListener('change', (e) => {
+        settings.activeNovelaiNegativePresetId = e.target.value;
+        const active = getActiveNovelaiNegativePreset(settings);
+        settings.novelaiNegativePrompt = active?.value || '';
+        syncNovelaiNegativePresetControls(settings);
+        saveSettings();
+    });
+
+    document.getElementById('iig_novelai_negative_preset_new')?.addEventListener('click', async () => {
+        const name = await Popup.show.input(t`New negative preset`, t`Enter a preset name:`);
+        if (!name) return;
+        const item = createNovelaiNegativePreset(name);
+        const promptInput = document.getElementById('iig_novelai_negative_prompt');
+        updateNovelaiNegativePreset(item.id, { value: promptInput?.value || '' });
+        settings.novelaiNegativePrompt = promptInput?.value || '';
+        syncNovelaiNegativePresetControls(settings);
+        saveSettings();
+    });
+
+    document.getElementById('iig_novelai_negative_preset_save')?.addEventListener('click', () => {
+        const active = getActiveNovelaiNegativePreset(settings);
+        if (!active) return;
+        const name = document.getElementById('iig_novelai_negative_preset_name')?.value || active.name;
+        const value = document.getElementById('iig_novelai_negative_prompt')?.value || '';
+        updateNovelaiNegativePreset(active.id, { name, value });
+        settings.novelaiNegativePrompt = value;
+        syncNovelaiNegativePresetControls(settings);
+        saveSettings();
+        toastr.success(t`Negative preset saved`, 'NovelAI');
+    });
+
+    document.getElementById('iig_novelai_negative_preset_delete')?.addEventListener('click', async () => {
+        const active = getActiveNovelaiNegativePreset(settings);
+        if (!active) return;
+        const confirmed = await Popup.show.confirm(t`Delete negative preset`, t`Delete preset "${active.name}"?`);
+        if (!confirmed) return;
+        removeNovelaiNegativePreset(active.id);
+        const next = getActiveNovelaiNegativePreset(settings);
+        settings.novelaiNegativePrompt = next?.value || '';
+        syncNovelaiNegativePresetControls(settings);
+        saveSettings();
+    });
+
     document.getElementById('iig_novelai_anlas_guard')?.addEventListener('change', (e) => {
         settings.novelaiAnlasGuard = e.target.checked;
         saveSettings();
@@ -966,6 +1111,29 @@ export function bindApiSectionEvents(settings, updateVisibility) {
 
     document.getElementById('iig_novelai_sm_dyn')?.addEventListener('change', (e) => {
         settings.novelaiSmDyn = e.target.checked;
+        saveSettings();
+    });
+
+    document.getElementById('iig_novelai_enable_references')?.addEventListener('change', (e) => {
+        settings.novelaiEnableReferences = e.target.checked;
+        saveSettings();
+        updateVisibility();
+    });
+
+    document.getElementById('iig_novelai_reference_type')?.addEventListener('change', (e) => {
+        settings.novelaiReferenceType = e.target.value;
+        saveSettings();
+    });
+
+    document.getElementById('iig_novelai_reference_strength')?.addEventListener('input', (e) => {
+        const value = Number.parseFloat(e.target.value);
+        settings.novelaiReferenceStrength = Number.isFinite(value) ? Math.min(1, Math.max(-1, value)) : 1;
+        saveSettings();
+    });
+
+    document.getElementById('iig_novelai_reference_fidelity')?.addEventListener('input', (e) => {
+        const value = Number.parseFloat(e.target.value);
+        settings.novelaiReferenceFidelity = Number.isFinite(value) ? Math.min(1, Math.max(-1, value)) : 0.75;
         saveSettings();
     });
 

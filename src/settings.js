@@ -23,6 +23,7 @@ export const MAX_ADDITIONAL_REFERENCES = 256;
 // захардкожена в 3 местах `providers.js` (Gemini / OpenRouter / Naistera).
 // Теперь редактируется в настройках и может быть отключена целиком.
 export const DEFAULT_REF_INSTRUCTION = '[CRITICAL: The reference image(s) above show the EXACT appearance of the character(s). You MUST precisely copy their: face structure, eye color, hair color and style, skin tone, body type, clothing, and all distinctive features. Do not deviate from the reference appearances.]';
+export const DEFAULT_NOVELAI_NEGATIVE_PROMPT = 'low quality, worst quality, bad quality, normal quality, jpeg artifacts, signature, watermark, username, artist name, text, letters, blurry, ugly, deformed, disfigured, poor anatomy, bad anatomy, malformed hands, mutated hands, extra fingers, fewer fingers, poorly drawn hands, extra limbs, missing limbs, long neck, bad proportions, mutated, mutation, poorly drawn face, bad eyes, cross-eyed, asymmetrical eyes, cloned face, duplicate, bots';
 
 // ----- Logger -----
 
@@ -121,17 +122,32 @@ export const defaultSettings = Object.freeze({
     problemboEnableReferences: true,
     // NovelAI specific (via ST server proxy)
     novelaiModel: 'nai-diffusion-4-5-full',
-    novelaiSampler: 'k_dpmpp_2m',
+    novelaiCustomModel: '',
+    novelaiSampler: 'k_euler_ancestral',
     novelaiScheduler: 'karras',
     novelaiSteps: 28,
     novelaiScale: 5,
     novelaiSize: 'Portrait',
-    novelaiNegativePrompt: '',
+    novelaiNegativePrompt: DEFAULT_NOVELAI_NEGATIVE_PROMPT,
+    novelaiNegativePresets: [{
+        id: 'novelai-negative-default',
+        name: 'Default quality / anatomy',
+        value: DEFAULT_NOVELAI_NEGATIVE_PROMPT,
+        favorite: false,
+        enabled: true,
+        createdAt: 0,
+        tags: [],
+    }],
+    activeNovelaiNegativePresetId: 'novelai-negative-default',
     novelaiAnlasGuard: true,
     novelaiDecrisper: false,
     novelaiVarietyBoost: false,
     novelaiSm: false,
     novelaiSmDyn: false,
+    novelaiEnableReferences: true,
+    novelaiReferenceType: 'character&style',
+    novelaiReferenceStrength: 1,
+    novelaiReferenceFidelity: 0.75,
     // NovelAI tag presets — text substitutions for character/object names in prompts.
     novelaiPresets: [],
     activeNovelaiPresetId: '',
@@ -252,6 +268,7 @@ export const CONNECTION_FIELDS = Object.freeze([
     'problemboResolution',
     'problemboEnableReferences',
     'novelaiModel',
+    'novelaiCustomModel',
     'novelaiSampler',
     'novelaiScheduler',
     'novelaiSteps',
@@ -263,6 +280,10 @@ export const CONNECTION_FIELDS = Object.freeze([
     'novelaiVarietyBoost',
     'novelaiSm',
     'novelaiSmDyn',
+    'novelaiEnableReferences',
+    'novelaiReferenceType',
+    'novelaiReferenceStrength',
+    'novelaiReferenceFidelity',
 ]);
 
 function makeProfileId() {
@@ -411,12 +432,15 @@ export const VIDEO_MODEL_KEYWORDS = [
 export const NAISTERA_MODELS = Object.freeze(['grok', 'grok-pro', 'nano banana 2', 'novelai']);
 
 export const NOVELAI_MODELS = Object.freeze([
+    { value: 'nai-diffusion-5-full', text: 'NAI Diffusion V5 (Full)' },
+    { value: 'nai-diffusion-5-curated', text: 'NAI Diffusion V5 (Curated)' },
     { value: 'nai-diffusion-4-5-full', text: 'NAI Diffusion V4.5 (Full)' },
     { value: 'nai-diffusion-4-5-curated', text: 'NAI Diffusion V4.5 (Curated)' },
     { value: 'nai-diffusion-4-full', text: 'NAI Diffusion V4 (Full)' },
     { value: 'nai-diffusion-4-curated-preview', text: 'NAI Diffusion V4 (Curated)' },
     { value: 'nai-diffusion-3', text: 'NAI Diffusion V3' },
     { value: 'nai-diffusion-furry-3', text: 'NAI Diffusion Furry V3' },
+    { value: '__custom__', text: 'NovelAI V5 / Custom model ID' },
 ]);
 
 export const NOVELAI_SAMPLERS = Object.freeze([
@@ -471,10 +495,23 @@ export function getSettings() {
         context.extensionSettings[MODULE_NAME] = structuredClone(defaultSettings);
     }
 
+    const needsNovelaiNegativeDefaults = !Object.hasOwn(
+        context.extensionSettings[MODULE_NAME],
+        'novelaiNegativePresets',
+    );
+
     // Ensure all default keys exist
     for (const key of Object.keys(defaultSettings)) {
         if (!Object.hasOwn(context.extensionSettings[MODULE_NAME], key)) {
             context.extensionSettings[MODULE_NAME][key] = defaultSettings[key];
+        }
+    }
+
+    if (needsNovelaiNegativeDefaults) {
+        context.extensionSettings[MODULE_NAME].novelaiNegativePresets = structuredClone(defaultSettings.novelaiNegativePresets);
+        context.extensionSettings[MODULE_NAME].activeNovelaiNegativePresetId = 'novelai-negative-default';
+        if (!String(context.extensionSettings[MODULE_NAME].novelaiNegativePrompt || '').trim()) {
+            context.extensionSettings[MODULE_NAME].novelaiNegativePrompt = DEFAULT_NOVELAI_NEGATIVE_PROMPT;
         }
     }
 
@@ -618,6 +655,7 @@ export function normalizeConfiguredEndpoint(apiType, endpoint) {
     if (apiType === 'naistera') {
         return trimmed.replace(/\/api\/generate$/i, '');
     }
+
     if (apiType === 'problembo') {
         return trimmed
             .replace(/\/apis\/v1\/client\/image-gen\/tasks$/i, '')
@@ -920,6 +958,13 @@ export const getActiveNovelaiPreset = _naiPresetOps.getActive;
 export const updateNovelaiPreset = _naiPresetOps.update;
 export const removeNovelaiPreset = _naiPresetOps.remove;
 export const toggleNovelaiPresetFavorite = _naiPresetOps.toggleFavorite;
+
+const _naiNegativePresetOps = makePresetOps('novelaiNegativePresets', 'activeNovelaiNegativePresetId', 'Negative preset');
+export const ensureNovelaiNegativePresets = _naiNegativePresetOps.ensure;
+export const createNovelaiNegativePreset = _naiNegativePresetOps.create;
+export const getActiveNovelaiNegativePreset = _naiNegativePresetOps.getActive;
+export const updateNovelaiNegativePreset = _naiNegativePresetOps.update;
+export const removeNovelaiNegativePreset = _naiNegativePresetOps.remove;
 
 // ----- Last request snapshot (in-memory, NOT persisted) -----
 

@@ -82,7 +82,7 @@ function buildUpdateVisibility(settings) {
         // показывается не только для Gemini, но и для любого OpenAI-семейства,
         // которое поддерживает /edits, и для OpenRouter/Electron Hub. Naistera
         // использует свой отдельный блок.
-        const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid || isAIGate || isProblembo) && refsSupported;
+        const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid || isAIGate || isProblembo || isNovelAI) && refsSupported;
 
         // Model is used for OpenAI and Gemini; Naistera and NovelAI have their own selectors.
         document.getElementById('iig_model_row')?.classList.toggle('iig-hidden', isNaistera || isNovelAI);
@@ -110,9 +110,16 @@ function buildUpdateVisibility(settings) {
         document.getElementById('iig_api_key')?.closest('.flex-row')?.classList.toggle('iig-hidden', isNovelAI);
         document.getElementById('iig_raw_endpoint')?.closest('.checkbox_label')?.classList.toggle('iig-hidden', isNovelAI);
 
-        // NovelAI: hide entire References section, show Presets instead.
-        document.querySelector('[data-section-toggle="iig_references_section"]')?.closest('.iig-section')?.classList.toggle('iig-hidden', isNovelAI);
+        // NovelAI's own master switch controls the whole References section.
+        const referencesSection = document.querySelector('[data-section-toggle="iig_references_section"]')?.closest('.iig-section');
+        if (isNovelAI) referencesSection?.classList.toggle('iig-hidden', !refsSupported);
+        else referencesSection?.classList.remove('iig-hidden');
         document.getElementById('iig_presets_section_wrapper')?.classList.toggle('iig-hidden', !isNovelAI);
+
+        document.getElementById('iig_novelai_custom_model_row')?.classList.toggle(
+            'iig-hidden',
+            !(isNovelAI && settings.novelaiModel === '__custom__')
+        );
 
         // Naistera-only params
         document.getElementById('iig_naistera_model_row')?.classList.toggle('iig-hidden', !isNaistera);

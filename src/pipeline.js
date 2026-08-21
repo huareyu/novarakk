@@ -193,7 +193,15 @@ function refToPreviewDataUrl(ref) {
  * префикс только для провайдеров из REF_INSTRUCTION_PROVIDERS).
  */
 function buildRequestSnapshot({ prompt, style, references, matchedAdditionalRefs, options, provider, settings }) {
-    let snapshotPrompt = buildFinalGenerationPrompt(prompt, style, matchedAdditionalRefs || [], settings);
+    const includeReferencePromptBlocks = !(settings.apiType === 'novelai'
+        && settings.novelaiEnableReferences === false);
+    let snapshotPrompt = buildFinalGenerationPrompt(
+        prompt,
+        style,
+        includeReferencePromptBlocks ? (matchedAdditionalRefs || []) : [],
+        settings,
+        { includeReferencePromptBlocks },
+    );
     let refInstructionApplied = false;
 
     if (references.length > 0 && REF_INSTRUCTION_PROVIDERS.has(settings.apiType)) {
@@ -419,7 +427,11 @@ export async function generateImageWithRetry(prompt, style, onStatusUpdate, opti
     const maxRetries = settings.maxRetries;
     const baseDelay = settings.retryDelay;
 
-    const matchedAdditionalRefs = getMatchedAdditionalReferences(prompt);
+    const novelaiReferencesDisabled = settings.apiType === 'novelai'
+        && settings.novelaiEnableReferences === false;
+    const matchedAdditionalRefs = novelaiReferencesDisabled
+        ? []
+        : getMatchedAdditionalReferences(prompt);
     if (matchedAdditionalRefs.length > 0) {
         iigLog(
             'INFO',
@@ -460,7 +472,7 @@ export async function generateImageWithRetry(prompt, style, onStatusUpdate, opti
                 : t`Generating...`;
             onStatusUpdate?.(statusText);
 
-            const libraryPromptBlock = settings.apiType === 'gemini'
+            const libraryPromptBlock = settings.apiType === 'gemini' || novelaiReferencesDisabled
                 ? ''
                 : await buildActiveCharacterLibraryPromptBlock(settings, prompt);
             const requestPrompt = libraryPromptBlock ? `${prompt}\n\n${libraryPromptBlock}` : prompt;

@@ -279,7 +279,13 @@ export function buildAdditionalReferencesPromptBlock(matchedRefs = []) {
     return `Additional References:\n${items.map((item) => `- ${item}`).join('\n')}`;
 }
 
-export function buildFinalGenerationPrompt(prompt, style, matchedAdditionalRefs = [], settings = getSettings()) {
+export function buildFinalGenerationPrompt(
+    prompt,
+    style,
+    matchedAdditionalRefs = [],
+    settings = getSettings(),
+    { includeReferencePromptBlocks = true } = {},
+) {
     const prefixValue = String(getActivePrefix(settings)?.value || '').trim();
     const suffixValue = String(getActiveSuffix(settings)?.value || '').trim();
     let desc = String(prompt || '').trim();
@@ -289,15 +295,17 @@ export function buildFinalGenerationPrompt(prompt, style, matchedAdditionalRefs 
     const effectiveStyle = resolveEffectiveStyle(style, settings);
     let fullPrompt = injectStyleBlock(desc, effectiveStyle);
 
-    const additionalReferencesBlock = buildAdditionalReferencesPromptBlock(matchedAdditionalRefs);
-    if (additionalReferencesBlock) {
-        fullPrompt = `${fullPrompt}\n\n${additionalReferencesBlock}`.trim();
-    }
+    if (includeReferencePromptBlocks) {
+        const additionalReferencesBlock = buildAdditionalReferencesPromptBlock(matchedAdditionalRefs);
+        if (additionalReferencesBlock) {
+            fullPrompt = `${fullPrompt}\n\n${additionalReferencesBlock}`.trim();
+        }
 
     // NPC appearance + wardrobe instructions (порт из MG).
-    const extraBlocks = buildExtraPromptBlocks(prompt);
-    if (extraBlocks.length > 0) {
-        fullPrompt = `${fullPrompt}\n\n${extraBlocks.join('\n\n')}`.trim();
+        const extraBlocks = buildExtraPromptBlocks(prompt);
+        if (extraBlocks.length > 0) {
+            fullPrompt = `${fullPrompt}\n\n${extraBlocks.join('\n\n')}`.trim();
+        }
     }
 
     return fullPrompt;

@@ -148,7 +148,14 @@ export class NovelAIProvider extends Provider {
         const settings = getSettings();
         const { getRequestHeaders } = SillyTavern.getContext();
 
-        let fullPrompt = buildFinalGenerationPrompt(prompt, style, options.matchedAdditionalRefs || [], settings);
+        const referencesEnabled = settings.novelaiEnableReferences !== false;
+        let fullPrompt = buildFinalGenerationPrompt(
+            prompt,
+            style,
+            referencesEnabled ? (options.matchedAdditionalRefs || []) : [],
+            settings,
+            { includeReferencePromptBlocks: referencesEnabled },
+        );
         fullPrompt = applyNovelaiPresets(fullPrompt, settings);
         if (references.length > 0) {
             const instruction = getEffectiveRefInstruction(settings);
@@ -160,7 +167,7 @@ export class NovelAIProvider extends Provider {
 
         iigLog(
             'INFO',
-            `NovelAI generate: model=${model} ${width}x${height} refs=${references.length} steps=${steps} sampler=${settings.novelaiSampler} scheduler=${settings.novelaiScheduler} scale=${settings.novelaiScale} anlasGuard=${settings.novelaiAnlasGuard}`
+            `NovelAI generate: model=${model} ${width}x${height} refsEnabled=${referencesEnabled} refs=${references.length} referencePromptBlocks=${referencesEnabled ? 'on' : 'off'} steps=${steps} sampler=${settings.novelaiSampler} scheduler=${settings.novelaiScheduler} scale=${settings.novelaiScale} anlasGuard=${settings.novelaiAnlasGuard}`
         );
 
         const body = {
@@ -178,7 +185,8 @@ export class NovelAIProvider extends Provider {
             sm,
             sm_dyn: smDyn,
             seed: -1,
-            reference_images: references,
+            references_enabled: referencesEnabled,
+            reference_images: referencesEnabled ? references : [],
             reference_type: ['character', 'style', 'character&style'].includes(settings.novelaiReferenceType)
                 ? settings.novelaiReferenceType
                 : 'character&style',

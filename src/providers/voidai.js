@@ -246,7 +246,7 @@ export class VoidProvider extends Provider {
     }
 
     async generate({ prompt, style, references = [], options = {} }) {
-        const settings = getSettings();
+        const settings = options.providerSettings || getSettings();
         const url = buildGenerationUrl(settings, '/v1/chat/completions');
         const model = settings.model;
 

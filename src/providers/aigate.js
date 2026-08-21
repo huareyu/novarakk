@@ -139,7 +139,7 @@ export class AIGateProvider extends Provider {
     }
 
     async generate({ prompt, style, references = [], options = {} }) {
-        const settings = getSettings();
+        const settings = options.providerSettings || getSettings();
         const model = settings.model;
 
         if (isAigateGeminiModel(model)) {
@@ -352,8 +352,8 @@ export class AIGateProvider extends Provider {
         return extractImageFromResult(result);
     }
 
-    async fetchModels() {
-        const settings = getSettings();
+    async fetchModels(settingsOverride = null) {
+        const settings = settingsOverride || getSettings();
         const endpoint = (getEffectiveEndpoint(settings) || AIGATE_DEFAULT_ENDPOINT).replace(/\/$/, '');
         if (!settings.apiKey) {
             console.warn('[IIG] AIGate fetchModels: API key not set');

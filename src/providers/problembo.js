@@ -350,7 +350,7 @@ export class ProblemboProvider extends Provider {
     }
 
     async generate({ prompt, style, references = [], options = {} }) {
-        const settings = getSettings();
+        const settings = options.providerSettings || getSettings();
         const signal = options.signal;
         const apiBase = getClientApiBase(settings);
         const headers = {
@@ -536,8 +536,8 @@ export class ProblemboProvider extends Provider {
         }
     }
 
-    async fetchModels() {
-        const settings = getSettings();
+    async fetchModels(settingsOverride = null) {
+        const settings = settingsOverride || getSettings();
         try {
             const models = await loadCatalog(settings, true);
             return models.map(model => model.id);

@@ -145,7 +145,7 @@ export class NovelAIProvider extends Provider {
     }
 
     async generate({ prompt, style, references = [], options = {} }) {
-        const settings = getSettings();
+        const settings = options.providerSettings || getSettings();
         const { getRequestHeaders } = SillyTavern.getContext();
 
         const referencesEnabled = settings.novelaiEnableReferences !== false;

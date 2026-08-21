@@ -235,8 +235,8 @@ export class Provider {
      *
      * @returns {Promise<string[]>}
      */
-    async fetchModels() {
-        const settings = getSettings();
+    async fetchModels(settingsOverride = null) {
+        const settings = settingsOverride || getSettings();
         const endpoint = getEffectiveEndpoint(settings);
 
         if (!endpoint || !settings.apiKey) {

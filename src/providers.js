@@ -129,8 +129,7 @@ export async function fetchModels() {
 
 // ----- Validation (общий entry, используется pipeline) -----
 
-export function validateSettings() {
-    const settings = getSettings();
+export function validateSettings(settings = getSettings()) {
     const provider = resolveActiveProvider(settings);
     if (!provider) {
         throw new Error(t`Settings error: unknown API (${settings.apiType})`);

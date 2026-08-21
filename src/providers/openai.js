@@ -98,7 +98,7 @@ export class OpenAIProvider extends Provider {
     }
 
     async generate({ prompt, style, references = [], options = {} }) {
-        const settings = getSettings();
+        const settings = options.providerSettings || getSettings();
         let fullPrompt = buildFinalGenerationPrompt(prompt, style, options.matchedAdditionalRefs || [], settings);
 
         // Префикс refInstruction — только когда реально уходит хотя бы один

@@ -122,7 +122,7 @@ export class OpenRouterProvider extends Provider {
     }
 
     async generate({ prompt, style, references = [], options = {} }) {
-        const settings = getSettings();
+        const settings = options.providerSettings || getSettings();
         const url = buildGenerationUrl(settings, '/chat/completions');
 
         const model = settings.model;
@@ -243,8 +243,8 @@ export class OpenRouterProvider extends Provider {
     /**
      * Свой fetchModels: фильтры `input_modalities=image,text` + `output_modalities=image`.
      */
-    async fetchModels() {
-        const settings = getSettings();
+    async fetchModels(settingsOverride = null) {
+        const settings = settingsOverride || getSettings();
         const endpoint = (String(settings.endpoint || '').trim() || OPENROUTER_DEFAULT_ENDPOINT)
             .replace(/\/$/, '');
 

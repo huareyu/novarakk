@@ -137,7 +137,7 @@ export class ElectronHubProvider extends OpenAIProvider {
      * Переопределяем generate для добавления ElectronHub-специфичных параметров.
      */
     async generate({ prompt, style, references = [], options = {} }) {
-        const settings = getSettings();
+        const settings = options.providerSettings || getSettings();
         let fullPrompt = buildFinalGenerationPrompt(prompt, style, options.matchedAdditionalRefs || [], settings);
 
         // Префикс refInstruction только когда есть референсы
@@ -238,8 +238,8 @@ export class ElectronHubProvider extends OpenAIProvider {
     /**
      * Список image-моделей через фильтр по полю `endpoints`.
      */
-    async fetchModels() {
-        const settings = getSettings();
+    async fetchModels(settingsOverride = null) {
+        const settings = settingsOverride || getSettings();
         const endpoint = (getEffectiveEndpoint(settings) || ELECTRONHUB_DEFAULT_ENDPOINT).replace(/\/$/, '');
 
         if (!settings.apiKey) {

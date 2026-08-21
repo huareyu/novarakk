@@ -6,8 +6,9 @@
  * pagination, sorting, NPC manager, quick settings, maintenance tools.
  */
 
-import { getSettings, iigLog, MODULE_NAME } from './settings.js';
+import { getSettings, iigLog, MODULE_NAME, NAISTERA_MODELS, NOVELAI_MODELS } from './settings.js';
 import {
+    getAllProviders,
     resolveActiveProvider,
     validateSettings as validateProviderSettings,
 } from './providers.js';
@@ -70,6 +71,11 @@ const swDefaults = Object.freeze({
     tryOnPrompt: '',
     genLookPrompt: '',
     tryOnAsAvatar: true,
+    generationOverrideEnabled: false,
+    generationProvider: '',
+    generationProfileId: '',
+    generationModel: '',
+    generationImageSize: '',
 });
 
 // ── Settings ──
@@ -101,6 +107,202 @@ export function swGetSettings() {
     }
     if (!s.outfitTypes.some(t => t.id === SW_FALLBACK_TYPE)) s.outfitTypes.push({ id: SW_FALLBACK_TYPE, label: 'Другое', icon: 'fa-tag' });
     return s;
+}
+
+function swProviderModel(settings, apiType = settings?.apiType) {
+    if (apiType === 'novelai') {
+        return settings?.novelaiModel === '__custom__'
+            ? String(settings?.novelaiCustomModel || '')
+            : String(settings?.novelaiModel || '');
+    }
+    if (apiType === 'naistera') return String(settings?.naisteraModel || settings?.model || '');
+    return String(settings?.model || '');
+}
+
+function swSetProviderModel(settings, apiType, model) {
+    const value = String(model || '').trim();
+    if (apiType === 'novelai') {
+        settings.novelaiModel = value;
+        settings.novelaiCustomModel = '';
+    } else if (apiType === 'naistera') {
+        settings.naisteraModel = value;
+        settings.model = value;
+    } else {
+        settings.model = value;
+    }
+}
+
+function swConnectionProfiles() {
+    const profiles = getSettings().connectionProfiles;
+    return Array.isArray(profiles) ? profiles.filter(profile => profile && profile.id) : [];
+}
+
+function swKnownProviderModels(apiType) {
+    if (apiType === 'naistera') return [...NAISTERA_MODELS];
+    if (apiType === 'novelai') return NOVELAI_MODELS.map(item => item.value).filter(value => value !== '__custom__');
+    return [];
+}
+
+function swResolveGenerationRoute() {
+    const base = getSettings();
+    const wardrobe = swGetSettings();
+    if (!wardrobe.generationOverrideEnabled) {
+        const provider = resolveActiveProvider(base);
+        return { settings: base, provider, overridden: false, profile: null };
+    }
+
+    const apiType = wardrobe.generationProvider || base.apiType;
+    const matchingProfiles = swConnectionProfiles().filter(profile => profile.apiType === apiType);
+    let profile = matchingProfiles.find(item => item.id === wardrobe.generationProfileId) || null;
+    if (!profile && base.apiType !== apiType) profile = matchingProfiles[0] || null;
+    if (!profile && base.apiType !== apiType) {
+        throw new Error(`Для провайдера «${apiType}» нет сохранённого профиля подключения. Создайте его в настройках API.`);
+    }
+
+    const routeSettings = { ...base, ...(profile || {}), apiType };
+    const selectedModel = wardrobe.generationModel || swProviderModel(routeSettings, apiType);
+    swSetProviderModel(routeSettings, apiType, selectedModel);
+    const provider = resolveActiveProvider(routeSettings);
+    return { settings: routeSettings, provider, overridden: true, profile };
+}
+
+function swGenerationRouteLabel() {
+    try {
+        const route = swResolveGenerationRoute();
+        if (!route.provider) return 'провайдер не выбран';
+        const model = swProviderModel(route.settings, route.settings.apiType) || 'модель не выбрана';
+        const routeLabel = route.overridden
+            ? `${route.provider.displayName}: ${model}`
+            : `активная — ${route.provider.displayName}: ${model}`;
+        const fixedSize = swGetSettings().generationImageSize;
+        return fixedSize ? `${routeLabel} · ${fixedSize}` : routeLabel;
+    } catch (error) {
+        return String(error.message || error);
+    }
+}
+
+function swGenerationControlsHtml(prefix, open = false) {
+    const base = getSettings();
+    const wardrobe = swGetSettings();
+    const selectedProvider = wardrobe.generationProvider || base.apiType;
+    const providers = getAllProviders();
+    return `<details class="sw-generation-route" id="${prefix}-route" ${open ? 'open' : ''}>
+        <summary><i class="fa-solid fa-microchip"></i> Модель примерки и сборки: <span class="sw-generation-route-summary">${esc(swGenerationRouteLabel())}</span></summary>
+        <div class="sw-generation-route-body">
+            <label class="sw-quick-check"><input type="checkbox" id="${prefix}-override" ${wardrobe.generationOverrideEnabled ? 'checked' : ''}><span>Переопределить активную модель</span></label>
+            <div class="sw-quick-row sw-generation-size-row"><label>Размер результата</label><select class="text_pole" id="${prefix}-image-size">
+                <option value="" ${!wardrobe.generationImageSize ? 'selected' : ''}>Как в настройках провайдера</option>
+                ${['1K', '2K', '4K'].map(size => `<option value="${size}" ${wardrobe.generationImageSize === size ? 'selected' : ''}>Фиксированно ${size}</option>`).join('')}
+            </select><div class="sw-quick-hint">Только для примерки, генерации образа и конструктора. Если модель не поддерживает выбранный размер, провайдер использует доступный.</div></div>
+            <div class="sw-generation-route-fields" ${wardrobe.generationOverrideEnabled ? '' : 'hidden'}>
+                <div class="sw-quick-row"><label>Провайдер</label><select class="text_pole" id="${prefix}-provider">${providers.map(provider => `<option value="${esc(provider.id)}" ${provider.id === selectedProvider ? 'selected' : ''}>${esc(provider.displayName)}</option>`).join('')}</select></div>
+                <div class="sw-quick-row"><label>Профиль подключения</label><select class="text_pole" id="${prefix}-profile"></select></div>
+                <div class="sw-quick-row"><label>Модель</label><div class="sw-quick-model-wrap"><input class="text_pole" id="${prefix}-model" list="${prefix}-models" value="${esc(wardrobe.generationModel)}" placeholder="Модель из профиля"><datalist id="${prefix}-models"></datalist><button type="button" class="sw-generation-model-refresh" id="${prefix}-refresh" title="Загрузить модели провайдера"><i class="fa-solid fa-rotate"></i></button></div></div>
+                <div class="sw-quick-hint">Ключ и endpoint берутся из выбранного профиля подключения. Поле модели допускает и собственный ID.</div>
+            </div>
+        </div>
+    </details>`;
+}
+
+function swBindGenerationControls(root, prefix) {
+    const wardrobe = swGetSettings();
+    const override = root.querySelector(`#${prefix}-override`);
+    const fields = root.querySelector(`#${prefix}-route .sw-generation-route-fields`);
+    const providerSelect = root.querySelector(`#${prefix}-provider`);
+    const profileSelect = root.querySelector(`#${prefix}-profile`);
+    const modelInput = root.querySelector(`#${prefix}-model`);
+    const imageSizeSelect = root.querySelector(`#${prefix}-image-size`);
+    const modelsList = root.querySelector(`#${prefix}-models`);
+    const summary = root.querySelector(`#${prefix}-route .sw-generation-route-summary`);
+
+    const updateSummary = () => { if (summary) summary.textContent = swGenerationRouteLabel(); };
+    const profilesForProvider = () => swConnectionProfiles().filter(profile => profile.apiType === providerSelect.value);
+    const renderProfiles = (preferId = wardrobe.generationProfileId) => {
+        const profiles = profilesForProvider();
+        profileSelect.innerHTML = '';
+        if (getSettings().apiType === providerSelect.value) {
+            const option = document.createElement('option');
+            option.value = ''; option.textContent = 'Текущие активные настройки';
+            profileSelect.appendChild(option);
+        }
+        for (const profile of profiles) {
+            const option = document.createElement('option');
+            option.value = profile.id; option.textContent = profile.name || profile.id;
+            profileSelect.appendChild(option);
+        }
+        const available = [...profileSelect.options].some(option => option.value === preferId);
+        profileSelect.value = available ? preferId : (profileSelect.options[0]?.value || '');
+        wardrobe.generationProfileId = profileSelect.value;
+    };
+    const selectedSource = () => {
+        const profile = swConnectionProfiles().find(item => item.id === profileSelect.value);
+        return profile || (getSettings().apiType === providerSelect.value ? getSettings() : null);
+    };
+    const fillModelList = (models = []) => {
+        const sourceModel = swProviderModel(selectedSource(), providerSelect.value);
+        const values = [...new Set([...swKnownProviderModels(providerSelect.value), sourceModel, ...models].map(String).filter(Boolean))];
+        modelsList.innerHTML = '';
+        for (const model of values) {
+            const option = document.createElement('option'); option.value = model; modelsList.appendChild(option);
+        }
+    };
+    const adoptSourceModel = () => {
+        if (wardrobe.generationModel) return;
+        const source = selectedSource();
+        if (source) modelInput.placeholder = swProviderModel(source, providerSelect.value) || 'Введите ID модели';
+    };
+
+    renderProfiles();
+    adoptSourceModel();
+    fillModelList();
+    override?.addEventListener('change', () => {
+        wardrobe.generationOverrideEnabled = override.checked;
+        fields.hidden = !override.checked;
+        swSave(); updateSummary();
+    });
+    providerSelect?.addEventListener('change', () => {
+        wardrobe.generationProvider = providerSelect.value;
+        wardrobe.generationProfileId = '';
+        wardrobe.generationModel = '';
+        modelInput.value = '';
+        renderProfiles(''); adoptSourceModel(); fillModelList(); swSave(); updateSummary();
+    });
+    profileSelect?.addEventListener('change', () => {
+        wardrobe.generationProfileId = profileSelect.value;
+        wardrobe.generationModel = '';
+        modelInput.value = '';
+        adoptSourceModel(); fillModelList(); swSave(); updateSummary();
+    });
+    modelInput?.addEventListener('input', () => {
+        wardrobe.generationModel = modelInput.value.trim();
+        swSave(); updateSummary();
+    });
+    imageSizeSelect?.addEventListener('change', () => {
+        wardrobe.generationImageSize = ['1K', '2K', '4K'].includes(imageSizeSelect.value) ? imageSizeSelect.value : '';
+        swSave(); updateSummary();
+    });
+    root.querySelector(`#${prefix}-refresh`)?.addEventListener('click', async event => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        button.querySelector('i')?.classList.add('fa-spin');
+        try {
+            wardrobe.generationOverrideEnabled = true;
+            wardrobe.generationProvider = providerSelect.value;
+            wardrobe.generationProfileId = profileSelect.value;
+            const route = swResolveGenerationRoute();
+            if (!route.provider) throw new Error('Провайдер не выбран');
+            if (route.settings.rawEndpoint) throw new Error('Для raw endpoint модель вводится вручную');
+            const models = await route.provider.fetchModels(route.settings);
+            fillModelList(models);
+            toastr.success(`Загружено моделей: ${modelsList.children.length}`, 'Гардероб');
+        } catch (error) {
+            toastr.error(String(error.message || error), 'Модели гардероба');
+        } finally {
+            button.disabled = false;
+            button.querySelector('i')?.classList.remove('fa-spin');
+        }
+    });
+    updateSummary();
 }
 
 function swForEachOutfit(s, cb) {
@@ -901,10 +1103,11 @@ async function swTryOnGenerate(side, outfitB64, outfitDesc) {
 }
 
 async function swGenerateWardrobeImage(side, extraReferences, prompt) {
-    validateProviderSettings();
-    const settings = getSettings();
-    const provider = resolveActiveProvider(settings);
+    const route = swResolveGenerationRoute();
+    const settings = route.settings;
+    const provider = route.provider;
     if (!provider) throw new Error('Провайдер генерации не настроен');
+    validateProviderSettings(settings);
 
     const personB64 = await swGetPersonRefB64(side);
     if (!personB64) {
@@ -923,7 +1126,11 @@ async function swGenerateWardrobeImage(side, extraReferences, prompt) {
         prompt,
         style: '',
         references,
-        options: { aspectRatio: '2:3' },
+        options: {
+            aspectRatio: '2:3',
+            imageSize: swGetSettings().generationImageSize || undefined,
+            providerSettings: settings,
+        },
     });
 
     let output = generated;
@@ -1005,7 +1212,7 @@ export function swOpenModal() {
         <div class="sw-modal-header">
             <span class="sw-modal-title">Гардероб — <b>${esc(cn)}</b></span>
             <div class="sw-modal-header-btns">
-                <div class="sw-header-btn sw-btn-maint" title="Обслуживание: дубликаты и чистка файлов"><i class="fa-solid fa-broom"></i></div>
+                <div class="sw-header-btn sw-btn-maint" title="Управление гардеробом: распределение, дубликаты и чистка"><i class="fa-solid fa-toolbox"></i></div>
                 <div class="sw-header-btn sw-btn-quick" title="Быстрые настройки"><i class="fa-solid fa-sliders"></i></div>
                 <div class="sw-modal-close" title="Закрыть"><i class="fa-solid fa-xmark"></i></div>
             </div>
@@ -1266,6 +1473,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
                 <div class="sw-tryon-btn" id="sw-tryon-btn"><i class="fa-solid ${isBuild ? 'fa-layer-group' : (isGen ? 'fa-wand-magic-sparkles' : 'fa-person-rays')}"></i> ${isBuild ? 'Собрать' : (isGen ? 'Сгенерировать' : 'Примерить')}</div>
             </div>
             <div class="sw-tryon-status" id="sw-tryon-status" hidden></div>
+            ${swGenerationControlsHtml('sw-form-gen')}
             <div class="sw-tryon-pick" id="sw-tryon-pick" hidden>
                 <div class="sw-tryon-opt" data-pick="orig" title="Сохранить исходную картинку наряда"><img alt="оригинал"><span>Оригинал</span></div>
                 <div class="sw-tryon-opt" data-pick="gen" title="Сохранить сгенерированную примерку"><img alt="примерка"><span>Примерка</span></div>
@@ -1283,6 +1491,7 @@ function swOpenOutfitForm({ mode, view, base64 = null, item = null, defaultName 
             </div>
         </div>`;
     ov.appendChild(panel); document.body.appendChild(ov);
+    swBindGenerationControls(panel, 'sw-form-gen');
 
     function formEsc(e) { if (e.key === 'Escape' && !document.getElementById('sw-crop-overlay')) { e.stopImmediatePropagation(); close(); } }
     function close() {
@@ -1623,10 +1832,13 @@ function swOpenQuickSettings() {
                 <label class="sw-quick-check" style="margin-top:8px;"><input type="checkbox" id="sw-q-tryon-avatar" ${swGetSettings().tryOnAsAvatar ? 'checked' : ''}><span>Примерка → аватар-референс</span></label>
             </div>
 
+            ${swGenerationControlsHtml('sw-quick-gen', true)}
+
             <div class="sw-quick-hint">Настройки сохраняются автоматически и синхронизируются с панелью расширения.</div>
         </div>`;
 
     ov.appendChild(panel); document.body.appendChild(ov);
+    swBindGenerationControls(panel, 'sw-quick-gen');
     panel.querySelector('.sw-quick-close').addEventListener('click', () => ov.remove());
 
     const tagsList = panel.querySelector('#sw-tags-list');
@@ -1786,23 +1998,374 @@ async function swDeleteFiles(dir, filenames) {
     return { ok, fail };
 }
 
+function swMaintenanceOwners() {
+    const ctx = SillyTavern.getContext();
+    const settings = swGetSettings();
+    const owners = [];
+    const add = (owner) => { if (!owners.some(item => item.key === owner.key)) owners.push(owner); };
+
+    add({
+        key: 'shared:bot', kind: 'shared', side: 'bot', name: 'Общий для ботов',
+        label: 'Общий гардероб ботов', detail: 'Все карточки персонажей', avatarUrl: '',
+        list: () => settings.sharedBotWardrobe,
+        clearActive(ids) {
+            if (ids.has(settings.sharedBotActive)) settings.sharedBotActive = null;
+            for (const map of [settings.sharedBotActiveByChat]) {
+                for (const key of Object.keys(map || {})) if (ids.has(map[key])) map[key] = null;
+            }
+        },
+    });
+    add({
+        key: 'shared:user', kind: 'shared', side: 'user', name: 'Общий для персон',
+        label: 'Общий гардероб персон', detail: 'Все пользовательские персоны', avatarUrl: '',
+        list: () => settings.sharedUserWardrobe,
+        clearActive(ids) {
+            if (ids.has(settings.sharedUserActive)) settings.sharedUserActive = null;
+            for (const map of [settings.sharedUserActiveByChat, settings.sharedUserActiveByPersona]) {
+                for (const key of Object.keys(map || {})) if (ids.has(map[key])) map[key] = null;
+            }
+        },
+    });
+
+    const characterNames = new Set([
+        ...Object.keys(settings.wardrobes || {}),
+        ...(Array.isArray(ctx.characters) ? ctx.characters.map(character => String(character?.name || '').trim()) : []),
+    ]);
+    for (const name of [...characterNames].filter(Boolean).sort((a, b) => a.localeCompare(b))) {
+        const character = Array.isArray(ctx.characters) ? ctx.characters.find(item => String(item?.name || '').trim() === name) : null;
+        const avatarUrl = character?.avatar ? `/characters/${encodeURIComponent(character.avatar)}` : '';
+        add({
+            key: `character:${name}`, kind: 'character', side: 'bot', name,
+            label: `Бот — ${name}`, detail: name === swCharName() ? 'Активная карточка персонажа' : 'Карточка персонажа', avatarUrl,
+            list() {
+                if (!settings.wardrobes[name]) settings.wardrobes[name] = { bot: [], user: [] };
+                if (!Array.isArray(settings.wardrobes[name].bot)) settings.wardrobes[name].bot = [];
+                return settings.wardrobes[name].bot;
+            },
+            clearActive(ids) {
+                if (settings.activeOutfits?.[name] && ids.has(settings.activeOutfits[name].bot)) settings.activeOutfits[name].bot = null;
+            },
+        });
+    }
+
+    const personas = ctx.powerUserSettings?.personas || {};
+    const personaKeys = new Set([
+        ...Object.keys(settings.personaWardrobes || {}),
+        ...Object.keys(personas).map(avatar => `persona:${avatar}`),
+    ]);
+    for (const key of [...personaKeys].filter(value => value.startsWith('persona:')).sort((a, b) => a.localeCompare(b))) {
+        const avatar = key.slice('persona:'.length);
+        const fallback = avatar.startsWith('name:') ? avatar.slice(5) : avatar.replace(/\.[^.]+$/, '');
+        const name = String(personas[avatar] || fallback || 'Persona');
+        add({
+            key, kind: 'persona', side: 'user', name,
+            label: `Персона — ${name}`,
+            detail: `${key === swPersonaKey() ? 'Активная персона · ' : ''}${avatar.startsWith('name:') ? avatar.slice(5) : avatar}`,
+            avatarUrl: avatar.startsWith('name:') ? '' : `/User Avatars/${encodeURIComponent(avatar)}`,
+            list() {
+                if (!Array.isArray(settings.personaWardrobes[key])) settings.personaWardrobes[key] = [];
+                return settings.personaWardrobes[key];
+            },
+            clearActive(ids) {
+                if (ids.has(settings.personaActiveOutfits?.[key])) settings.personaActiveOutfits[key] = null;
+            },
+        });
+    }
+    return owners;
+}
+
+function swRenderDistributionLegacy(body) {
+    const owners = swMaintenanceOwners();
+    let sourceKey = owners.find(owner => owner.list().length)?.key || owners[0]?.key || '';
+    let targetKind = 'all';
+    let targetQuery = '';
+    const selectedOutfits = new Set();
+    const selectedTargets = new Set();
+
+    const source = () => owners.find(owner => owner.key === sourceKey) || owners[0];
+    const filteredTargets = () => {
+        const query = targetQuery.trim().toLocaleLowerCase();
+        return owners.filter(owner => {
+            if (owner.key === sourceKey) return false;
+            if (targetKind !== 'all' && owner.kind !== targetKind) return false;
+            if (!query) return true;
+            return `${owner.name || ''} ${owner.label || ''} ${owner.detail || ''}`.toLocaleLowerCase().includes(query);
+        });
+    };
+    const sourceOptions = () => {
+        const groups = [
+            ['shared', 'Общие гардеробы'],
+            ['character', 'Боты / карточки персонажей'],
+            ['persona', 'Персоны'],
+        ];
+        return groups.map(([kind, label]) => {
+            const items = owners.filter(owner => owner.kind === kind);
+            if (!items.length) return '';
+            return `<optgroup label="${label}">${items.map(owner => `<option value="${esc(owner.key)}" ${owner.key === sourceKey ? 'selected' : ''}>${esc(owner.name || owner.label)} — ${esc(owner.detail || owner.label)} (${owner.list().length})</option>`).join('')}</optgroup>`;
+        }).join('');
+    };
+    const targetCard = (owner) => {
+        const icon = owner.kind === 'persona' ? 'fa-user' : owner.kind === 'character' ? 'fa-address-card' : 'fa-box-archive';
+        return `<label class="sw-distribute-target" title="${esc(owner.label)}">
+            <input type="checkbox" value="${esc(owner.key)}" ${selectedTargets.has(owner.key) ? 'checked' : ''}>
+            <span class="sw-dist-target-card">
+                <span class="sw-dist-avatar"><i class="fa-solid ${icon}"></i>${owner.avatarUrl ? `<img src="${esc(owner.avatarUrl)}" loading="lazy" alt="" onerror="this.remove()">` : ''}</span>
+                <span class="sw-dist-target-meta"><b>${esc(owner.name || owner.label)}</b><small>${esc(owner.detail || owner.label)} · ${owner.list().length} ${swPlural(owner.list().length, 'наряд', 'наряда', 'нарядов')}</small></span>
+                <i class="fa-solid fa-check sw-dist-target-check"></i>
+            </span>
+        </label>`;
+    };
+    const render = () => {
+        const current = source();
+        const outfits = current?.list() || [];
+        for (const id of [...selectedOutfits]) if (!outfits.some(outfit => outfit?.id === id)) selectedOutfits.delete(id);
+        selectedTargets.delete(sourceKey);
+        const visibleTargets = filteredTargets();
+        body.innerHTML = `<div class="sw-distribute">
+            <section class="sw-dist-section">
+                <div class="sw-dist-heading"><span>1</span><div><b>Откуда взять</b><small>Выбери гардероб и наряды</small></div></div>
+                <select class="text_pole sw-distribute-source">${sourceOptions()}</select>
+                <div class="sw-cleanup-tools"><span class="sw-cleanup-link sw-dist-all">Выбрать все</span><span class="sw-cleanup-link sw-dist-none">Снять выбор</span><span class="sw-distribute-count">${selectedOutfits.size} из ${outfits.length}</span></div>
+                ${outfits.length ? `<div class="sw-distribute-outfits">${outfits.map(outfit => `<button type="button" class="sw-distribute-outfit ${selectedOutfits.has(outfit.id) ? 'sw-dist-selected' : ''}" data-outfit="${esc(outfit.id)}" title="${esc(outfit.name || 'Без названия')}"><img src="${esc(swImgSrc(outfit))}" loading="lazy"><span>${esc(outfit.name || 'Без названия')}</span><i class="fa-solid fa-check"></i></button>`).join('')}</div>` : '<div class="sw-cleanup-empty">В этом гардеробе пока нет нарядов.</div>'}
+            </section>
+            <section class="sw-dist-section sw-dist-recipients">
+                <div class="sw-dist-heading"><span>2</span><div><b>Куда отправить</b><small>Можно выбрать несколько ботов и персон</small></div></div>
+                <div class="sw-dist-filterbar">
+                    <div class="sw-dist-kind-tabs">
+                        <button type="button" data-kind="all" class="${targetKind === 'all' ? 'active' : ''}">Все</button>
+                        <button type="button" data-kind="character" class="${targetKind === 'character' ? 'active' : ''}">Боты</button>
+                        <button type="button" data-kind="persona" class="${targetKind === 'persona' ? 'active' : ''}">Персоны</button>
+                        <button type="button" data-kind="shared" class="${targetKind === 'shared' ? 'active' : ''}">Общие</button>
+                    </div>
+                    <label class="sw-dist-search"><i class="fa-solid fa-magnifying-glass"></i><input type="search" class="text_pole" value="${esc(targetQuery)}" placeholder="Найти получателя"></label>
+                </div>
+                <div class="sw-cleanup-tools"><span class="sw-cleanup-link sw-target-all">Выбрать показанных</span><span class="sw-cleanup-link sw-target-none">Очистить выбор</span><span class="sw-distribute-count">Выбрано: ${selectedTargets.size}</span></div>
+                <div class="sw-distribute-targets">${visibleTargets.length ? visibleTargets.map(targetCard).join('') : '<div class="sw-dist-no-targets">Ничего не найдено</div>'}</div>
+            </section>
+            <div class="sw-distribute-actions">
+                <div class="sw-dist-action-summary"><b>${selectedOutfits.size} ${swPlural(selectedOutfits.size, 'наряд', 'наряда', 'нарядов')}</b><i class="fa-solid fa-arrow-right"></i><b>${selectedTargets.size} ${swPlural(selectedTargets.size, 'получатель', 'получателя', 'получателей')}</b></div>
+                <button type="button" class="menu_button sw-dist-copy" ${!selectedOutfits.size || !selectedTargets.size ? 'disabled' : ''}><i class="fa-solid fa-copy"></i><span>Копировать</span></button>
+                <button type="button" class="menu_button sw-dist-move" ${!selectedOutfits.size || !selectedTargets.size ? 'disabled' : ''}><i class="fa-solid fa-arrow-right-arrow-left"></i><span>Перенести</span></button>
+            </div>
+        </div>`;
+
+        body.querySelector('.sw-distribute-source')?.addEventListener('change', event => { sourceKey = event.target.value; selectedOutfits.clear(); render(); });
+        body.querySelector('.sw-dist-all')?.addEventListener('click', () => { for (const outfit of outfits) if (outfit?.id) selectedOutfits.add(outfit.id); render(); });
+        body.querySelector('.sw-dist-none')?.addEventListener('click', () => { selectedOutfits.clear(); render(); });
+        for (const card of body.querySelectorAll('.sw-distribute-outfit')) card.addEventListener('click', () => {
+            const id = card.dataset.outfit;
+            selectedOutfits.has(id) ? selectedOutfits.delete(id) : selectedOutfits.add(id);
+            render();
+        });
+        const syncTargets = () => {
+            for (const input of body.querySelectorAll('.sw-distribute-target input')) {
+                input.checked ? selectedTargets.add(input.value) : selectedTargets.delete(input.value);
+            }
+            const count = body.querySelector('.sw-dist-recipients .sw-distribute-count');
+            if (count) count.textContent = `Выбрано: ${selectedTargets.size}`;
+            const summary = body.querySelector('.sw-dist-action-summary');
+            if (summary) summary.innerHTML = `<b>${selectedOutfits.size} ${swPlural(selectedOutfits.size, 'наряд', 'наряда', 'нарядов')}</b><i class="fa-solid fa-arrow-right"></i><b>${selectedTargets.size} ${swPlural(selectedTargets.size, 'получатель', 'получателя', 'получателей')}</b>`;
+            for (const button of body.querySelectorAll('.sw-dist-copy, .sw-dist-move')) button.disabled = !selectedOutfits.size || !selectedTargets.size;
+        };
+        for (const input of body.querySelectorAll('.sw-distribute-target input')) input.addEventListener('change', syncTargets);
+        for (const tab of body.querySelectorAll('.sw-dist-kind-tabs button')) tab.addEventListener('click', () => { targetKind = tab.dataset.kind; render(); });
+        body.querySelector('.sw-dist-search input')?.addEventListener('input', event => {
+            targetQuery = event.target.value;
+            render();
+            const search = body.querySelector('.sw-dist-search input');
+            search?.focus(); search?.setSelectionRange(targetQuery.length, targetQuery.length);
+        });
+        body.querySelector('.sw-target-all')?.addEventListener('click', () => { for (const owner of visibleTargets) selectedTargets.add(owner.key); render(); });
+        body.querySelector('.sw-target-none')?.addEventListener('click', () => { selectedTargets.clear(); render(); });
+
+        const distribute = (move) => {
+            const targets = owners.filter(owner => selectedTargets.has(owner.key) && owner.key !== sourceKey);
+            const picked = outfits.filter(outfit => selectedOutfits.has(outfit?.id));
+            if (!picked.length) { toastr.info('Выберите хотя бы один наряд', 'Обслуживание гардероба'); return; }
+            if (!targets.length) { toastr.info('Выберите хотя бы одного получателя', 'Обслуживание гардероба'); return; }
+            if (move && !confirm(`Перенести ${picked.length} ${swPlural(picked.length, 'наряд', 'наряда', 'нарядов')} в ${targets.length} ${swPlural(targets.length, 'гардероб', 'гардероба', 'гардеробов')}?`)) return;
+
+            const now = Date.now();
+            for (const target of targets) {
+                const targetList = target.list();
+                for (const outfit of picked) {
+                    const clone = structuredClone(outfit);
+                    clone.id = uid();
+                    clone.addedAt = now;
+                    delete clone.lastWorn;
+                    targetList.push(clone);
+                }
+            }
+            if (move) {
+                const movedIds = new Set(picked.map(outfit => outfit.id));
+                const currentList = current.list();
+                currentList.splice(0, currentList.length, ...currentList.filter(outfit => !movedIds.has(outfit?.id)));
+                current.clearActive(movedIds);
+                selectedOutfits.clear();
+            }
+            swSave();
+            swUpdatePromptInjection();
+            if (swOpen) swRender();
+            toastr.success(`${move ? 'Перенесено' : 'Скопировано'}: ${picked.length} × ${targets.length}`, 'Обслуживание гардероба');
+            render();
+        };
+        body.querySelector('.sw-dist-copy')?.addEventListener('click', () => distribute(false));
+        body.querySelector('.sw-dist-move')?.addEventListener('click', () => distribute(true));
+    };
+    render();
+}
+
+function swRenderDistribution(body) {
+    const owners = swMaintenanceOwners();
+    let sourceKey = owners.find(owner => owner.list().length)?.key || owners[0]?.key || '';
+    let sourcePage = 0;
+    let targetKind = 'all';
+    let targetQuery = '';
+    const selectedOutfits = new Set();
+    const selectedTargets = new Set();
+    const source = () => owners.find(owner => owner.key === sourceKey) || owners[0];
+
+    const groupedOptions = ({ targets = false } = {}) => [
+        ['shared', 'Общие гардеробы'],
+        ['character', 'Боты / карточки персонажей'],
+        ['persona', 'Персоны'],
+    ].map(([kind, label]) => {
+        const items = owners.filter(owner => owner.kind === kind
+            && (!targets || (owner.key !== sourceKey && !selectedTargets.has(owner.key))));
+        if (!items.length) return '';
+        return `<optgroup label="${label}">${items.map(owner => `<option value="${esc(owner.key)}" ${!targets && owner.key === sourceKey ? 'selected' : ''}>${esc(owner.name || owner.label)} — ${esc(owner.detail || owner.label)} (${owner.list().length})</option>`).join('')}</optgroup>`;
+    }).join('');
+
+    const render = () => {
+        const current = source();
+        const outfits = current?.list() || [];
+        const pageSize = 6;
+        const totalPages = Math.max(1, Math.ceil(outfits.length / pageSize));
+        sourcePage = Math.max(0, Math.min(sourcePage, totalPages - 1));
+        const pageOutfits = outfits.slice(sourcePage * pageSize, sourcePage * pageSize + pageSize);
+        const pageButtons = Array.from({ length: totalPages }, (_, index) => index)
+            .filter(index => totalPages <= 7 || index === 0 || index === totalPages - 1 || Math.abs(index - sourcePage) <= 2);
+        const pageNav = [];
+        let previousPage = -1;
+        for (const page of pageButtons) {
+            if (page - previousPage > 1) pageNav.push('<span class="sw-dist-page-gap">…</span>');
+            pageNav.push(`<button type="button" class="sw-dist-page-number ${page === sourcePage ? 'active' : ''}" data-page="${page}">${page + 1}</button>`);
+            previousPage = page;
+        }
+        for (const id of [...selectedOutfits]) if (!outfits.some(outfit => outfit?.id === id)) selectedOutfits.delete(id);
+        selectedTargets.delete(sourceKey);
+        const selectedOwners = owners.filter(owner => selectedTargets.has(owner.key));
+        const selectableBots = owners.filter(owner => owner.kind === 'character' && owner.key !== sourceKey);
+        const selectablePersonas = owners.filter(owner => owner.kind === 'persona' && owner.key !== sourceKey);
+        const allBotsSelected = selectableBots.length > 0 && selectableBots.every(owner => selectedTargets.has(owner.key));
+        const allPersonasSelected = selectablePersonas.length > 0 && selectablePersonas.every(owner => selectedTargets.has(owner.key));
+        const compactOwners = selectedOwners.filter(owner => !(allBotsSelected && owner.kind === 'character') && !(allPersonasSelected && owner.kind === 'persona'));
+        const chipParts = [];
+        if (allBotsSelected) chipParts.push(`<button type="button" class="sw-dist-target-chip sw-dist-target-group" data-group="character"><span>Все боты</span><small>${selectableBots.length}</small><i class="fa-solid fa-xmark"></i></button>`);
+        if (allPersonasSelected) chipParts.push(`<button type="button" class="sw-dist-target-chip sw-dist-target-group" data-group="persona"><span>Все персоны</span><small>${selectablePersonas.length}</small><i class="fa-solid fa-xmark"></i></button>`);
+        chipParts.push(...compactOwners.slice(0, 10).map(owner => `<button type="button" class="sw-dist-target-chip" data-owner="${esc(owner.key)}"><span>${esc(owner.name || owner.label)}</span><small>${owner.kind === 'character' ? 'бот' : owner.kind === 'persona' ? 'персона' : 'общий'}</small><i class="fa-solid fa-xmark"></i></button>`));
+        if (compactOwners.length > 10) chipParts.push(`<span class="sw-dist-target-more">+ ещё ${compactOwners.length - 10}</span>`);
+
+        body.innerHTML = `<div class="sw-distribute sw-distribute-compact">
+            <section class="sw-dist-section">
+                <div class="sw-dist-heading"><span>1</span><div><b>Откуда взять</b><small>Выбери гардероб и наряды</small></div></div>
+                <select class="text_pole sw-distribute-source">${groupedOptions()}</select>
+                <div class="sw-cleanup-tools"><span class="sw-cleanup-link sw-dist-page-all">Выбрать страницу</span><span class="sw-cleanup-link sw-dist-all">Выбрать все</span><span class="sw-cleanup-link sw-dist-none">Снять выбор</span><span class="sw-distribute-count">${selectedOutfits.size} из ${outfits.length}</span></div>
+                ${outfits.length ? `<div class="sw-distribute-outfits sw-distribute-outfits-paged">${pageOutfits.map(outfit => `<button type="button" class="sw-distribute-outfit ${selectedOutfits.has(outfit.id) ? 'sw-dist-selected' : ''}" data-outfit="${esc(outfit.id)}" title="${esc(outfit.name || 'Без названия')}"><img src="${esc(swImgSrc(outfit))}" loading="lazy"><span>${esc(outfit.name || 'Без названия')}</span><i class="fa-solid fa-check"></i></button>`).join('')}</div><div class="sw-dist-pagination"><button type="button" class="sw-dist-page-arrow" data-page="${sourcePage - 1}" ${sourcePage === 0 ? 'disabled' : ''}><i class="fa-solid fa-chevron-left"></i></button>${pageNav.join('')}<button type="button" class="sw-dist-page-arrow" data-page="${sourcePage + 1}" ${sourcePage >= totalPages - 1 ? 'disabled' : ''}><i class="fa-solid fa-chevron-right"></i></button></div>` : '<div class="sw-cleanup-empty">В этом гардеробе пока нет нарядов.</div>'}
+            </section>
+            <section class="sw-dist-section">
+                <div class="sw-dist-heading"><span>2</span><div><b>Куда отправить</b><small>Добавь одного или несколько получателей</small></div></div>
+                <div class="sw-dist-target-search"><div class="sw-dist-kind-tabs"><button type="button" data-kind="all" class="${targetKind === 'all' ? 'active' : ''}">Все</button><button type="button" data-kind="character" class="${targetKind === 'character' ? 'active' : ''}">Боты</button><button type="button" data-kind="persona" class="${targetKind === 'persona' ? 'active' : ''}">Персоны</button><button type="button" data-kind="shared" class="${targetKind === 'shared' ? 'active' : ''}">Общие</button></div><label class="sw-dist-search"><i class="fa-solid fa-magnifying-glass"></i><input type="search" class="text_pole" value="${esc(targetQuery)}" placeholder="Начни вводить имя"></label><div class="sw-dist-search-results"></div></div>
+                <div class="sw-cleanup-tools"><span class="sw-cleanup-link sw-target-bots">Добавить всех ботов</span><span class="sw-cleanup-link sw-target-personas">Добавить все персоны</span><span class="sw-cleanup-link sw-target-none">Очистить</span><span class="sw-distribute-count">Выбрано: ${selectedTargets.size}</span></div>
+                <div class="sw-dist-selected-targets">${chipParts.length ? chipParts.join('') : '<span class="sw-dist-target-empty">Получатели пока не выбраны</span>'}</div>
+            </section>
+            <div class="sw-distribute-actions">
+                <div class="sw-dist-action-summary"><b>${selectedOutfits.size} ${swPlural(selectedOutfits.size, 'наряд', 'наряда', 'нарядов')}</b><i class="fa-solid fa-arrow-right"></i><b>${selectedTargets.size} ${swPlural(selectedTargets.size, 'получатель', 'получателя', 'получателей')}</b></div>
+                <button type="button" class="menu_button sw-dist-copy" ${!selectedOutfits.size || !selectedTargets.size ? 'disabled' : ''}><i class="fa-solid fa-copy"></i><span>Копировать</span></button>
+                <button type="button" class="menu_button sw-dist-move" ${!selectedOutfits.size || !selectedTargets.size ? 'disabled' : ''}><i class="fa-solid fa-arrow-right-arrow-left"></i><span>Перенести</span></button>
+            </div>
+        </div>`;
+
+        body.querySelector('.sw-distribute-source')?.addEventListener('change', event => { sourceKey = event.target.value; sourcePage = 0; selectedOutfits.clear(); render(); });
+        body.querySelector('.sw-dist-page-all')?.addEventListener('click', () => { for (const outfit of pageOutfits) if (outfit?.id) selectedOutfits.add(outfit.id); render(); });
+        body.querySelector('.sw-dist-all')?.addEventListener('click', () => { for (const outfit of outfits) if (outfit?.id) selectedOutfits.add(outfit.id); render(); });
+        body.querySelector('.sw-dist-none')?.addEventListener('click', () => { selectedOutfits.clear(); render(); });
+        for (const button of body.querySelectorAll('.sw-dist-page-number, .sw-dist-page-arrow')) button.addEventListener('click', () => { const page = Number(button.dataset.page); if (Number.isInteger(page) && page >= 0 && page < totalPages) { sourcePage = page; render(); } });
+        for (const card of body.querySelectorAll('.sw-distribute-outfit')) card.addEventListener('click', () => { selectedOutfits.has(card.dataset.outfit) ? selectedOutfits.delete(card.dataset.outfit) : selectedOutfits.add(card.dataset.outfit); render(); });
+        const paintTargetResults = () => {
+            const resultBox = body.querySelector('.sw-dist-search-results');
+            if (!resultBox) return;
+            const query = targetQuery.trim().toLocaleLowerCase();
+            const matches = owners.filter(owner => owner.key !== sourceKey
+                && !selectedTargets.has(owner.key)
+                && (targetKind === 'all' || owner.kind === targetKind)
+                && (!query || `${owner.name || ''} ${owner.label || ''} ${owner.detail || ''}`.toLocaleLowerCase().includes(query)))
+                .slice(0, 10);
+            resultBox.innerHTML = matches.length ? matches.map(owner => `<button type="button" class="sw-dist-search-result" data-owner="${esc(owner.key)}"><span class="sw-dist-avatar"><i class="fa-solid ${owner.kind === 'persona' ? 'fa-user' : owner.kind === 'character' ? 'fa-address-card' : 'fa-box-archive'}"></i>${owner.avatarUrl ? `<img src="${esc(owner.avatarUrl)}" loading="lazy" alt="" onerror="this.remove()">` : ''}</span><span><b>${esc(owner.name || owner.label)}</b><small>${esc(owner.detail || owner.label)}</small></span><i class="fa-solid fa-plus"></i></button>`).join('') : '<span class="sw-dist-search-empty">Ничего не найдено</span>';
+            for (const result of resultBox.querySelectorAll('.sw-dist-search-result')) result.addEventListener('click', () => { selectedTargets.add(result.dataset.owner); targetQuery = ''; render(); });
+        };
+        const searchInput = body.querySelector('.sw-dist-search input');
+        searchInput?.addEventListener('input', () => { targetQuery = searchInput.value; paintTargetResults(); });
+        searchInput?.addEventListener('focus', paintTargetResults);
+        for (const tab of body.querySelectorAll('.sw-dist-kind-tabs button')) tab.addEventListener('click', () => { targetKind = tab.dataset.kind; for (const item of body.querySelectorAll('.sw-dist-kind-tabs button')) item.classList.toggle('active', item === tab); paintTargetResults(); });
+        for (const chip of body.querySelectorAll('.sw-dist-target-chip:not(.sw-dist-target-group)')) chip.addEventListener('click', () => { selectedTargets.delete(chip.dataset.owner); render(); });
+        for (const chip of body.querySelectorAll('.sw-dist-target-group')) chip.addEventListener('click', () => { for (const owner of owners) if (owner.kind === chip.dataset.group) selectedTargets.delete(owner.key); render(); });
+        body.querySelector('.sw-target-bots')?.addEventListener('click', () => { if (selectableBots.length > 20 && !confirm(`Добавить всех ботов (${selectableBots.length}) в получатели?`)) return; for (const owner of selectableBots) selectedTargets.add(owner.key); render(); });
+        body.querySelector('.sw-target-personas')?.addEventListener('click', () => { if (selectablePersonas.length > 20 && !confirm(`Добавить все персоны (${selectablePersonas.length}) в получатели?`)) return; for (const owner of selectablePersonas) selectedTargets.add(owner.key); render(); });
+        body.querySelector('.sw-target-none')?.addEventListener('click', () => { selectedTargets.clear(); render(); });
+
+        const distribute = (move) => {
+            const targets = owners.filter(owner => selectedTargets.has(owner.key) && owner.key !== sourceKey);
+            const picked = outfits.filter(outfit => selectedOutfits.has(outfit?.id));
+            if (!picked.length || !targets.length) return;
+            if (move && !confirm(`Перенести ${picked.length} ${swPlural(picked.length, 'наряд', 'наряда', 'нарядов')} в ${targets.length} ${swPlural(targets.length, 'гардероб', 'гардероба', 'гардеробов')}?`)) return;
+            const now = Date.now();
+            for (const target of targets) for (const outfit of picked) {
+                const clone = structuredClone(outfit); clone.id = uid(); clone.addedAt = now; delete clone.lastWorn; target.list().push(clone);
+            }
+            if (move) {
+                const ids = new Set(picked.map(outfit => outfit.id));
+                const list = current.list(); list.splice(0, list.length, ...list.filter(outfit => !ids.has(outfit?.id)));
+                current.clearActive(ids); selectedOutfits.clear();
+            }
+            swSave(); swUpdatePromptInjection(); if (swOpen) swRender();
+            toastr.success(`${move ? 'Перенесено' : 'Скопировано'}: ${picked.length} × ${targets.length}`, 'Обслуживание гардероба');
+            render();
+        };
+        body.querySelector('.sw-dist-copy')?.addEventListener('click', () => distribute(false));
+        body.querySelector('.sw-dist-move')?.addEventListener('click', () => distribute(true));
+    };
+    render();
+}
+
 function swOpenMaintenance(tab) {
-    document.getElementById('sw-maint-overlay')?.remove();
-    const ov = document.createElement('div'); ov.id = 'sw-maint-overlay';
+    const previous = document.getElementById('sw-maint-overlay');
+    if (typeof previous?._swClose === 'function') previous._swClose();
+    else previous?.remove();
+    const ov = document.createElement('dialog'); ov.id = 'sw-maint-overlay';
     const panel = document.createElement('div'); panel.id = 'sw-maint-panel';
     panel.innerHTML = `
         <div class="sw-cleanup-header"><span><i class="fa-solid fa-broom"></i> Обслуживание гардероба</span><div class="sw-cleanup-close" title="Закрыть"><i class="fa-solid fa-xmark"></i></div></div>
         <div class="sw-maint-tabs">
             <div class="sw-maint-tab" data-mt="dedup"><i class="fa-solid fa-clone"></i> Дубликаты</div>
+            <div class="sw-maint-tab" data-mt="distribution"><i class="fa-solid fa-people-arrows"></i> Распределение</div>
             <div class="sw-maint-tab" data-mt="cleanup"><i class="fa-solid fa-broom"></i> Чистка файлов</div>
         </div>
         <div class="sw-cleanup-body" id="sw-maint-body"></div>`;
     ov.appendChild(panel); document.body.appendChild(ov);
+    if (typeof ov.showModal === 'function') ov.showModal();
+    else ov.setAttribute('open', '');
     const body = panel.querySelector('#sw-maint-body');
 
-    function close() { document.removeEventListener('keydown', maintEsc, true); ov.remove(); }
+    function close() {
+        document.removeEventListener('keydown', maintEsc, true);
+        if (ov.open && typeof ov.close === 'function') ov.close();
+        ov.remove();
+    }
+    ov._swClose = close;
     function maintEsc(e) { if (e.key === 'Escape') { e.stopImmediatePropagation(); close(); } }
     document.addEventListener('keydown', maintEsc, true);
+    ov.addEventListener('cancel', event => { event.preventDefault(); close(); });
     ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
     panel.querySelector('.sw-cleanup-close').addEventListener('click', close);
 
@@ -1811,10 +2374,12 @@ function swOpenMaintenance(tab) {
         if (which === curTab) return;
         curTab = which;
         for (const t of panel.querySelectorAll('.sw-maint-tab')) t.classList.toggle('sw-maint-tab-active', t.dataset.mt === which);
-        if (which === 'cleanup') swRenderCleanup(body); else swRenderDedup(body);
+        if (which === 'cleanup') swRenderCleanup(body);
+        else if (which === 'distribution') swRenderDistribution(body);
+        else swRenderDedup(body);
     }
     for (const t of panel.querySelectorAll('.sw-maint-tab')) t.addEventListener('click', () => show(t.dataset.mt));
-    show(tab === 'cleanup' ? 'cleanup' : 'dedup');
+    show(['cleanup', 'distribution'].includes(tab) ? tab : 'dedup');
 }
 
 function swRenderCleanup(body) {

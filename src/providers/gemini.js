@@ -182,7 +182,7 @@ export class GeminiProvider extends Provider {
     }
 
     async generate({ prompt, style, references = [], options = {} }) {
-        const settings = getSettings();
+        const settings = options.providerSettings || getSettings();
         const model = settings.model;
         const caps = getGeminiCapabilities(model);
         // Провайдер-префикс (vertex/, google/ и т.п.) стрипаем ТОЛЬКО для
@@ -351,8 +351,8 @@ export class GeminiProvider extends Provider {
      * Если первая попытка провалилась (4xx/5xx/network) — пробуем вторую.
      * Фильтруем только image-генеративные модели (см. isImageModel).
      */
-    async fetchModels() {
-        const settings = getSettings();
+    async fetchModels(settingsOverride = null) {
+        const settings = settingsOverride || getSettings();
         const endpoint = getEffectiveEndpoint(settings);
 
         if (!endpoint || !settings.apiKey) {

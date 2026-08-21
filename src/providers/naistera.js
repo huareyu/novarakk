@@ -97,7 +97,7 @@ export class NaisteraProvider extends Provider {
     }
 
     async generate({ prompt, style, references = [], options = {} }) {
-        const settings = getSettings();
+        const settings = options.providerSettings || getSettings();
         const endpoint = getEffectiveEndpoint(settings);
         const url = endpoint.endsWith('/api/generate') ? endpoint : `${endpoint}/api/generate`;
 

@@ -1,11 +1,11 @@
 /**
- * Naistera (custom / grok / nano banana 2 / novelai proxy): собственный
+ * Naistera: live model catalog + /api/generate endpoint for images and video.
  * /api/generate endpoint, умеет отдавать и картинки, и видео.
  */
 
 import {
     getSettings,
-    NAISTERA_MODELS,
+    iigLog,
     MAX_GENERATION_REFERENCE_IMAGES,
     normalizeNaisteraModel,
     naisteraModelSupportsReferences,
@@ -23,14 +23,20 @@ import {
 import { buildFinalGenerationPrompt } from '../parser.js';
 import { t } from '../i18n.js';
 import {
-    getCharacterAvatarDataUrl,
-    getUserAvatarDataUrl,
     collectPreviousContextReferences,
+    getReferenceImage,
+    getReferenceDescription,
 } from '../references.js';
 import { collectAvatarReferences, collectExtraReferences, mergeAvatarReferenceGroups } from '../extras.js';
 import { Provider, resolveLockedSetting } from './base.js';
 
 export class NaisteraProvider extends Provider {
+    constructor() {
+        super();
+        this.modelCatalog = new Map();
+        this.modelCatalogStatus = { authenticated: false, tier: null, publicFallback: false };
+    }
+
     get id() { return 'naistera'; }
     get displayName() { return 'Naistera'; }
 
@@ -47,20 +53,82 @@ export class NaisteraProvider extends Provider {
             errors.push(t`API key is not configured`);
         }
         const m = normalizeNaisteraModel(settings.naisteraModel);
-        if (!NAISTERA_MODELS.includes(m)) {
-            errors.push(t`For Naistera, select a model: grok / grok-pro / nano banana`);
+        if (!m) {
+            errors.push(t`Model is not selected`);
         }
         return errors;
     }
 
     supportsReferences(settings) {
-        return naisteraModelSupportsReferences(settings.naisteraModel);
+        const modelId = normalizeNaisteraModel(settings.naisteraModel);
+        const model = this.modelCatalog.get(modelId);
+        return model ? model.references !== false : naisteraModelSupportsReferences(modelId);
+    }
+
+    getModelLabel(modelId) {
+        return this.modelCatalog.get(String(modelId || ''))?.name || String(modelId || '');
+    }
+
+    getModelCatalogStatus() {
+        return { ...this.modelCatalogStatus };
+    }
+
+    async fetchModels(settingsOverride = null) {
+        const settings = settingsOverride || getSettings();
+        const endpoint = getEffectiveEndpoint(settings).replace(/\/$/, '');
+        const url = `${endpoint}/api/models`;
+        const request = async (authenticated) => {
+            const headers = { 'Accept': 'application/json' };
+            if (authenticated && settings.apiKey) {
+                headers.Authorization = `Bearer ${settings.apiKey}`;
+            }
+            return await fetch(url, { method: 'GET', headers });
+        };
+
+        let response;
+        let publicFallback = false;
+        try {
+            response = await request(true);
+        } catch (error) {
+            if (!settings.apiKey || error?.name !== 'TypeError') throw error;
+            iigLog('WARN', 'Naistera authenticated model discovery was blocked; retrying the public catalog');
+            publicFallback = true;
+            response = await request(false);
+        }
+
+        if (!response.ok) {
+            const detail = await response.text().catch(() => '');
+            throw new Error(`Naistera /api/models ${response.status}: ${String(detail).slice(0, 500)}`);
+        }
+
+        const payload = await response.json();
+        const models = (Array.isArray(payload?.models) ? payload.models : [])
+            .filter((model) => model?.id && model.visible !== false && model.deprecated !== true)
+            .map((model) => ({
+                id: String(model.id),
+                name: String(model.name || model.id),
+                references: model.references !== false,
+            }));
+
+        this.modelCatalog = new Map(models.map((model) => [model.id, model]));
+        this.modelCatalogStatus = {
+            authenticated: payload?.authenticated === true,
+            tier: payload?.tier || null,
+            publicFallback,
+        };
+        iigLog('INFO', `Naistera models loaded: ${models.length}; authenticated=${payload?.authenticated === true}; tier=${payload?.tier || 'public'}`);
+        return models.map((model) => model.id);
     }
 
     async collectReferences({ prompt = '', messageId, matchedAdditionalRefs = [], providerOptions = {} }) {
         const settings = getSettings();
         const normalizedModel = normalizeNaisteraModel(providerOptions.model || settings.naisteraModel);
-        if (!naisteraModelSupportsReferences(normalizedModel)) {
+        if (!this.modelCatalog.has(normalizedModel)) {
+            await this.fetchModels().catch((error) => {
+                iigLog('WARN', `Naistera model metadata unavailable: ${error?.message || error}`);
+            });
+        }
+        if (!this.supportsReferences({ ...settings, naisteraModel: normalizedModel })) {
             return [];
         }
 
@@ -104,7 +172,7 @@ export class NaisteraProvider extends Provider {
         const aspectRatio = resolveLockedSetting(options.aspectRatio)
             || resolveLockedSetting(settings.naisteraAspectRatio)
             || 'auto';
-        const model = normalizeNaisteraModel(options.model || settings.naisteraModel || 'grok');
+        const model = normalizeNaisteraModel(options.model || settings.naisteraModel || 'nano-banana-2');
         const preset = options.preset || null;
         const wantsVideoTest = Boolean(options.videoTestMode);
         const videoEveryN = normalizeNaisteraVideoFrequency(options.videoEveryN ?? settings.naisteraVideoEveryN);
@@ -124,7 +192,12 @@ export class NaisteraProvider extends Provider {
         };
         if (preset) body.preset = preset;
         if (references.length > 0) {
-            body.reference_images = references.slice(0, MAX_GENERATION_REFERENCE_IMAGES);
+            body.reference_objects = references.slice(0, MAX_GENERATION_REFERENCE_IMAGES)
+                .map((ref) => ({
+                    image: getReferenceImage(ref),
+                    description: getReferenceDescription(ref),
+                }))
+                .filter((ref) => ref.image);
         }
         if (wantsVideoTest) {
             body.video_test_mode = true;

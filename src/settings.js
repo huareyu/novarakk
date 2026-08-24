@@ -102,7 +102,7 @@ export const defaultSettings = Object.freeze({
     overrideImageSize: false,
     // Naistera specific
     naisteraAspectRatio: '1:1',
-    naisteraModel: 'grok', // 'grok' | 'grok-pro' | 'nano banana 2' | 'novelai'
+    naisteraModel: 'nano-banana-2',
     naisteraSendCharAvatar: false,
     naisteraSendUserAvatar: false,
     naisteraVideoTest: false,
@@ -466,8 +466,14 @@ export const VIDEO_MODEL_KEYWORDS = [
 
 // ----- Endpoint constants (UI + provider helpers) -----
 
-export const NAISTERA_MODELS = Object.freeze(['grok', 'grok-pro', 'nano banana 2', 'novelai']);
-
+// Public-catalog fallback for places that cannot load models asynchronously.
+// The main API settings UI loads the live catalog from Naistera's /api/models.
+export const NAISTERA_MODELS = Object.freeze([
+    'nano-banana-2',
+    'nano-banana-2-lite',
+    'novelai-v4.5',
+    'novelai-v5',
+]);
 export const NOVELAI_MODELS = Object.freeze([
     { value: 'nai-diffusion-5-full', text: 'NAI Diffusion V5 (Full)' },
     { value: 'nai-diffusion-5-curated', text: 'NAI Diffusion V5 (Curated)' },
@@ -564,32 +570,27 @@ export function saveSettings() {
 
 export function normalizeNaisteraModel(model) {
     const raw = String(model || '').trim().toLowerCase();
-    if (!raw) return 'grok';
+    if (!raw) return '';
     if (raw === 'grok pro') return 'grok-pro';
     if (raw === 'grok-pro') return 'grok-pro';
     if (raw === 'grok-imagine-pro') return 'grok-pro';
     if (raw === 'imagine-pro') return 'grok-pro';
-    if (raw === 'nano-banana') return 'nano banana 2';
-    if (raw === 'nano banana') return 'nano banana 2';
-    // Legacy value migration: map removed "nano banana pro" to "nano banana 2".
-    if (raw === 'nano-banana-pro') return 'nano banana 2';
-    if (raw === 'nano banana pro') return 'nano banana 2';
-    if (raw === 'nano-banana-2') return 'nano banana 2';
-    if (raw === 'nano banana 2') return 'nano banana 2';
-    if (raw === 'novel ai') return 'novelai';
-    if (raw === 'novelai') return 'novelai';
-    if (NAISTERA_MODELS.includes(raw)) return raw;
-    return 'grok';
+    if (raw === 'nano-banana' || raw === 'nano banana') return 'nano-banana-2';
+    if (raw === 'nano-banana-pro' || raw === 'nano banana pro') return 'nano-banana-2';
+    if (raw === 'nano banana 2') return 'nano-banana-2';
+    if (raw === 'nano banana 2 lite') return 'nano-banana-2-lite';
+    if (raw === 'novel ai' || raw === 'novelai') return 'novelai-v5';
+    return raw;
 }
 
 export function naisteraModelSupportsReferences(model) {
     const normalized = normalizeNaisteraModel(model);
-    return normalized !== 'novelai' && normalized !== 'grok-pro';
+    return Boolean(normalized) && !normalized.startsWith('novelai') && normalized !== 'grok-pro';
 }
 
 export function shouldUseNaisteraVideoTest(model) {
     const normalized = normalizeNaisteraModel(model);
-    return normalized === 'grok' || normalized === 'grok-pro' || normalized.startsWith('nano banana');
+    return normalized === 'grok' || normalized === 'grok-pro' || normalized.startsWith('nano-banana');
 }
 
 export function normalizeNaisteraVideoFrequency(value) {

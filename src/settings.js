@@ -75,7 +75,7 @@ export const defaultSettings = Object.freeze({
     suffixes: [],
     activeSuffixId: '',
     styleTags: ['GPT', 'Nano Banana', 'NovelAI', 'character', 'girl', 'boy', 'lighting'],
-    apiType: 'openai', // 'openai' | 'gemini' | 'openrouter' | 'electronhub' | 'naistera' | 'void' | 'aigate' | 'novelai' | 'problembo'
+    apiType: 'openai', // 'openai' | 'gemini' | 'openrouter' | 'electronhub' | 'naistera' | 'void' | 'aigate' | 'novelai'
     endpoint: '',
     /**
      * Если true — endpoint используется «как есть» для генерации (никаких
@@ -113,13 +113,6 @@ export const defaultSettings = Object.freeze({
     electronhubGuidanceScale: 7.5,
     electronhubSteps: 50,
     electronhubEnableReferences: false, // Experimental: try to use /v1/images/edits with references
-    // Problembo specific (native asynchronous task API)
-    problemboNegativePrompt: '',
-    problemboStyle: '',
-    problemboSeed: '',
-    problemboAspectRatio: '',
-    problemboResolution: '',
-    problemboEnableReferences: true,
     // NovelAI specific (via ST server proxy)
     novelaiModel: 'nai-diffusion-4-5-full',
     novelaiCustomModel: '',
@@ -261,12 +254,6 @@ export const CONNECTION_FIELDS = Object.freeze([
     'electronhubGuidanceScale',
     'electronhubSteps',
     'electronhubEnableReferences',
-    'problemboNegativePrompt',
-    'problemboStyle',
-    'problemboSeed',
-    'problemboAspectRatio',
-    'problemboResolution',
-    'problemboEnableReferences',
     'novelaiModel',
     'novelaiCustomModel',
     'novelaiSampler',
@@ -285,6 +272,56 @@ export const CONNECTION_FIELDS = Object.freeze([
     'novelaiReferenceStrength',
     'novelaiReferenceFidelity',
 ]);
+
+const REMOVED_PROBLEMBO_FIELDS = Object.freeze([
+    'problemboNegativePrompt',
+    'problemboStyle',
+    'problemboSeed',
+    'problemboAspectRatio',
+    'problemboResolution',
+    'problemboEnableReferences',
+]);
+
+/** Удаляет настройки и профили снятого с поддержки провайдера Problembo. */
+export function migrateRemovedProviders(settings = getSettings()) {
+    let changed = false;
+    const profiles = Array.isArray(settings.connectionProfiles) ? settings.connectionProfiles : [];
+    const remainingProfiles = profiles.filter(profile => profile?.apiType !== 'problembo');
+    if (remainingProfiles.length !== profiles.length) {
+        settings.connectionProfiles = remainingProfiles;
+        changed = true;
+    }
+
+    if (settings.apiType === 'problembo') {
+        const fallback = remainingProfiles.find(profile => profile.id === settings.activeConnectionProfileId)
+            || remainingProfiles[0]
+            || null;
+        if (fallback) {
+            for (const key of CONNECTION_FIELDS) settings[key] = fallback[key] ?? defaultSettings[key];
+            settings.activeConnectionProfileId = fallback.id;
+        } else {
+            settings.apiType = 'openai';
+            settings.endpoint = '';
+            settings.rawEndpoint = false;
+            settings.apiKey = '';
+            settings.model = '';
+            settings.activeConnectionProfileId = '';
+        }
+        changed = true;
+    } else if (!remainingProfiles.some(profile => profile.id === settings.activeConnectionProfileId)) {
+        settings.activeConnectionProfileId = remainingProfiles[0]?.id || '';
+    }
+
+    for (const field of REMOVED_PROBLEMBO_FIELDS) {
+        if (Object.hasOwn(settings, field)) {
+            delete settings[field];
+            changed = true;
+        }
+        for (const profile of remainingProfiles) delete profile[field];
+    }
+    if (changed) iigLog('INFO', 'Removed obsolete Problembo provider settings and profiles');
+    return changed;
+}
 
 function makeProfileId() {
     return `iig-profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -468,7 +505,6 @@ export const DEFAULT_ENDPOINTS = Object.freeze({
     electronhub: 'https://api.electronhub.ai',
     void: 'https://api.voidai.app',
     aigate: 'https://api.aigate.shop',
-    problembo: 'https://problembo.com',
 });
 
 export const ENDPOINT_PLACEHOLDERS = Object.freeze({
@@ -479,7 +515,6 @@ export const ENDPOINT_PLACEHOLDERS = Object.freeze({
     naistera: 'https://naistera.org',
     void: 'https://api.voidai.app',
     aigate: 'https://api.aigate.shop',
-    problembo: 'https://problembo.com',
 });
 
 // ----- Settings accessors -----
@@ -649,18 +684,12 @@ export function normalizeConfiguredEndpoint(apiType, endpoint) {
         if (apiType === 'openrouter') return DEFAULT_ENDPOINTS.openrouter;
         if (apiType === 'electronhub') return DEFAULT_ENDPOINTS.electronhub;
         if (apiType === 'aigate') return DEFAULT_ENDPOINTS.aigate;
-        if (apiType === 'problembo') return DEFAULT_ENDPOINTS.problembo;
         return '';
     }
     if (apiType === 'naistera') {
         return trimmed.replace(/\/api\/generate$/i, '');
     }
 
-    if (apiType === 'problembo') {
-        return trimmed
-            .replace(/\/apis\/v1\/client\/image-gen\/tasks$/i, '')
-            .replace(/\/apis\/v1\/client$/i, '');
-    }
     return trimmed;
 }
 

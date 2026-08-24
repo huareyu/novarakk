@@ -9,6 +9,7 @@
 
 import {
     getSettings,
+    migrateRemovedProviders,
     migrateConnectionProfilesFromLegacy,
     migrateAdditionalReferencesToLorebook,
     saveSettings,
@@ -30,6 +31,7 @@ import { initGallery } from './src/gallery.js';
 
     // One-time migrations: заполняем connection profiles и переносим
     // старые additionalReferences в lorebooks[0] (идемпотентно).
+    migrateRemovedProviders(settings);
     migrateConnectionProfilesFromLegacy(settings);
     migrateAdditionalReferencesToLorebook(settings);
     saveSettings();

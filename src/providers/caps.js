@@ -305,9 +305,6 @@ export function getActiveProviderMaxReferences(settings = getSettings()) {
         const kind = classifyOpenAIModel(settings.model);
         return getOpenAIModelMaxReferences(kind) || 0;
     }
-    if (apiType === 'problembo') {
-        return settings.problemboEnableReferences === false ? 0 : 4;
-    }
     if (apiType === 'naistera' || apiType === 'void') {
         return MAX_GENERATION_REFERENCE_IMAGES;
     }

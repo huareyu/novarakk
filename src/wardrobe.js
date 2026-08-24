@@ -94,6 +94,14 @@ export function swGetSettings() {
     if (!s.sharedUserActiveByPersona || typeof s.sharedUserActiveByPersona !== 'object') s.sharedUserActiveByPersona = {};
     if (!s.sharedBotActiveByChat || typeof s.sharedBotActiveByChat !== 'object') s.sharedBotActiveByChat = {};
     if (!s.sharedDeletedSourceIds || typeof s.sharedDeletedSourceIds !== 'object') s.sharedDeletedSourceIds = { bot: [], user: [] };
+    if (s.generationProvider === 'problembo') {
+        s.generationOverrideEnabled = false;
+        s.generationProvider = '';
+        s.generationProfileId = '';
+        s.generationModel = '';
+        s.generationImageSize = '';
+        ctx.saveSettingsDebounced();
+    }
     for (const side of ['bot', 'user']) {
         if (!Array.isArray(s.sharedDeletedSourceIds[side])) s.sharedDeletedSourceIds[side] = [];
         s.sharedDeletedSourceIds[side] = [...new Set(s.sharedDeletedSourceIds[side].map(String).filter(Boolean))];

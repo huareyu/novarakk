@@ -71,7 +71,6 @@ function buildUpdateVisibility(settings) {
         const isVoid = apiType === 'void';
         const isAIGate = apiType === 'aigate';
         const isNovelAI = apiType === 'novelai';
-        const isProblembo = apiType === 'problembo';
 
         // Поддерживает ли активный провайдер референсы (учитывая модель).
         const provider = resolveActiveProvider(settings);
@@ -82,7 +81,7 @@ function buildUpdateVisibility(settings) {
         // показывается не только для Gemini, но и для любого OpenAI-семейства,
         // которое поддерживает /edits, и для OpenRouter/Electron Hub. Naistera
         // использует свой отдельный блок.
-        const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid || isAIGate || isProblembo || isNovelAI) && refsSupported;
+        const commonAvatarRefsVisible = (isGemini || isOpenAI || isOpenRouter || isElectronHub || isVoid || isAIGate || isNovelAI) && refsSupported;
 
         // Model is used for OpenAI and Gemini; Naistera and NovelAI have their own selectors.
         document.getElementById('iig_model_row')?.classList.toggle('iig-hidden', isNaistera || isNovelAI);
@@ -102,7 +101,6 @@ function buildUpdateVisibility(settings) {
 
         // ElectronHub-only section
         document.getElementById('iig_electronhub_section')?.classList.toggle('iig-hidden', !isElectronHub);
-        document.getElementById('iig_problembo_section')?.classList.toggle('iig-hidden', !isProblembo);
 
         // NovelAI-only section; also hide endpoint/key/raw — NovelAI uses ST proxy.
         document.getElementById('iig_novelai_section')?.classList.toggle('iig-hidden', !isNovelAI);
@@ -157,7 +155,6 @@ function buildUpdateVisibility(settings) {
                 else if (isElectronHub) titleEl.textContent = 'Electron Hub';
                 else if (isVoid) titleEl.textContent = 'VoidAI / RouteMyAI';
                 else if (isAIGate) titleEl.textContent = 'AIGate';
-                else if (isProblembo) titleEl.textContent = 'Problembo';
                 else if (isOpenAI) titleEl.textContent = 'OpenAI / GPT Image';
                 else titleEl.textContent = 'Gemini / nano-banana';
             }

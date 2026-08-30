@@ -67,6 +67,31 @@ function applyTransform(imgEl) {
     imgEl.style.transform = `translate(${state.translateX}px, ${state.translateY}px) scale(${state.scale})`;
 }
 
+function getChatImageData(img) {
+    if (!(img instanceof HTMLImageElement)) return null;
+    if (!img.isConnected || !img.src || img.classList.contains('iig-error-image')) return null;
+    const rawSrc = String(img.getAttribute('src') || '');
+    if (!rawSrc || rawSrc.endsWith('[IMG:GEN]')) return null;
+
+    const instruction = parseInstructionAttr(img.getAttribute('data-iig-instruction'));
+    return {
+        element: img,
+        src: img.src,
+        alt: img.alt || '',
+        prompt: instruction ? (instruction.prompt || '') : (img.alt || ''),
+        style: instruction?.style || '',
+    };
+}
+
+/** Returns generated chat images in their current visual/message order. */
+function collectChatLightboxImages() {
+    const chat = document.getElementById('chat');
+    if (!chat) return [];
+    return Array.from(chat.querySelectorAll('img[data-iig-instruction], img.iig-generated-image'))
+        .map(getChatImageData)
+        .filter(Boolean);
+}
+
 
 /**
  * Инициализирует lightbox один раз. Повторный вызов — no-op.
@@ -173,6 +198,8 @@ export function initLightbox() {
         document.body.style.overflow = '';
         imgEl.src = '';
         imgEl.style.transform = '';
+        imgEl.style.transition = '';
+        imgEl.style.opacity = '';
         resetState();
         updateNavigation();
         updateZoomLevel();
@@ -238,10 +265,13 @@ export function initLightbox() {
         zoom(delta, e.clientX, e.clientY);
     }, { passive: false });
 
-    // --- Click on image: zoom in if scale=1, reset if zoomed (but NOT after drag) ---
+    let suppressImageClickUntil = 0;
+
+    // --- Click on image: zoom in if scale=1, reset if zoomed (but NOT after drag/swipe) ---
     imgEl.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (Date.now() < suppressImageClickUntil) return;
         if (state.didDrag) {
             state.didDrag = false;
             return;
@@ -295,21 +325,49 @@ export function initLightbox() {
     contentEl.addEventListener('pointerup', endDrag);
     contentEl.addEventListener('pointercancel', endDrag);
 
-    // --- Pinch-to-zoom (touch) ---
+    // --- Pinch-to-zoom + one-finger chat/gallery swipe (touch) ---
     let activeTouches = [];
+    let swipeGesture = null;
+
+    const resetSwipeVisual = (animated = true) => {
+        imgEl.style.transition = animated ? 'transform 160ms ease, opacity 160ms ease' : 'none';
+        imgEl.style.transform = '';
+        imgEl.style.opacity = '';
+        if (animated) {
+            setTimeout(() => {
+                if (!swipeGesture) imgEl.style.transition = '';
+            }, 180);
+        }
+    };
+
     contentEl.addEventListener('touchstart', (e) => {
         e.stopPropagation();
         activeTouches = Array.from(e.touches);
         if (activeTouches.length === 2) {
+            swipeGesture = null;
+            resetSwipeVisual(false);
             e.preventDefault();
             state.initialPinchDist = getTouchDist(activeTouches);
             state.initialPinchScale = state.scale;
+        } else if (activeTouches.length === 1 && state.scale <= 1 && (state.onPrevious || state.onNext)) {
+            const touch = activeTouches[0];
+            swipeGesture = {
+                id: touch.identifier,
+                startX: touch.clientX,
+                startY: touch.clientY,
+                currentX: touch.clientX,
+                currentY: touch.clientY,
+                startedAt: Date.now(),
+                axis: null,
+            };
         }
     }, { passive: false });
 
     contentEl.addEventListener('touchmove', (e) => {
         e.stopPropagation();
         if (e.touches.length === 2) {
+            swipeGesture = null;
+            resetSwipeVisual(false);
             e.preventDefault();
             const dist = getTouchDist(Array.from(e.touches));
             const delta = dist / state.initialPinchDist;
@@ -323,13 +381,68 @@ export function initLightbox() {
                 applyTransform(imgEl);
                 updateZoomLevel();
             }
+            return;
         }
+
+        if (!swipeGesture || e.touches.length !== 1 || state.scale > 1) return;
+        const touch = Array.from(e.touches).find((item) => item.identifier === swipeGesture.id);
+        if (!touch) return;
+        swipeGesture.currentX = touch.clientX;
+        swipeGesture.currentY = touch.clientY;
+        const dx = swipeGesture.currentX - swipeGesture.startX;
+        const dy = swipeGesture.currentY - swipeGesture.startY;
+
+        if (!swipeGesture.axis && Math.abs(dx) + Math.abs(dy) >= 10) {
+            swipeGesture.axis = Math.abs(dx) > Math.abs(dy) * 1.15 ? 'horizontal' : 'vertical';
+        }
+        if (swipeGesture.axis !== 'horizontal') return;
+
+        e.preventDefault();
+        suppressImageClickUntil = Date.now() + 500;
+        const canNavigate = dx < 0 ? typeof state.onNext === 'function' : typeof state.onPrevious === 'function';
+        const displayDx = canNavigate ? dx : dx * 0.24;
+        const width = Math.max(1, contentEl.clientWidth);
+        imgEl.style.transition = 'none';
+        imgEl.style.transform = `translate3d(${displayDx}px, 0, 0)`;
+        imgEl.style.opacity = String(1 - Math.min(0.22, Math.abs(displayDx) / (width * 2.2)));
     }, { passive: false });
 
-    contentEl.addEventListener('touchend', (e) => {
-        e.stopPropagation();
-        activeTouches = Array.from(e.touches);
-    }, { passive: true });
+    const finishSwipe = (e, cancelled = false) => {
+        e?.stopPropagation();
+        activeTouches = Array.from(e?.touches || []);
+        const gesture = swipeGesture;
+        swipeGesture = null;
+        if (!gesture) return;
+        if (gesture.axis !== 'horizontal') {
+            resetSwipeVisual(true);
+            return;
+        }
+
+        e?.preventDefault();
+        suppressImageClickUntil = Date.now() + 600;
+        const dx = gesture.currentX - gesture.startX;
+        const duration = Date.now() - gesture.startedAt;
+        const width = Math.max(1, contentEl.clientWidth);
+        const threshold = Math.min(90, Math.max(48, width * 0.14));
+        const committed = !cancelled && (Math.abs(dx) >= threshold || (duration < 350 && Math.abs(dx) >= 32));
+        const navigate = dx < 0 ? state.onNext : state.onPrevious;
+
+        if (!committed || typeof navigate !== 'function') {
+            resetSwipeVisual(true);
+            return;
+        }
+
+        imgEl.style.transition = 'transform 150ms ease-out, opacity 150ms ease-out';
+        imgEl.style.transform = `translate3d(${dx < 0 ? -width : width}px, 0, 0)`;
+        imgEl.style.opacity = '0';
+        setTimeout(() => {
+            resetSwipeVisual(false);
+            if (overlay.classList.contains('open')) navigate();
+        }, 145);
+    };
+
+    contentEl.addEventListener('touchend', (e) => finishSwipe(e, false), { passive: false });
+    contentEl.addEventListener('touchcancel', (e) => finishSwipe(e, true), { passive: false });
 
     // --- Block native drag so ST doesn't try to import the image ---
     imgEl.draggable = false;
@@ -371,10 +484,11 @@ export function initLightbox() {
         state.style = style;
         state.onPrevious = navigation?.onPrevious || null;
         state.onNext = navigation?.onNext || null;
-
         imgEl.src = src;
         imgEl.alt = alt;
         imgEl.style.transform = '';
+        imgEl.style.transition = '';
+        imgEl.style.opacity = '';
 
         promptTextEl.textContent = state.prompt || t`No prompt available`;
         if (state.style) {
@@ -410,12 +524,30 @@ export function initLightbox() {
         e.preventDefault();
         e.stopPropagation();
 
-        // Extract prompt from data-iig-instruction (alt as fallback)
-        const data = parseInstructionAttr(img.getAttribute('data-iig-instruction'));
-        const prompt = data ? (data.prompt || '') : (img.alt || '');
-        const style = data?.style || '';
+        const images = collectChatLightboxImages();
+        const initialIndex = images.findIndex((item) => item.element === img);
+        if (initialIndex < 0) return;
 
-        openWithData({ src: img.src, alt: img.alt || '', prompt, style });
+        const showChatImage = (index) => {
+            const item = images[index];
+            if (!item) return;
+
+            // Read the live element again so a completed reroll updates the image
+            // even if it happened while the lightbox was already open.
+            const liveItem = getChatImageData(item.element) || item;
+            openWithData({
+                src: liveItem.src,
+                alt: liveItem.alt,
+                prompt: liveItem.prompt,
+                style: liveItem.style,
+                navigation: {
+                    onPrevious: index > 0 ? () => showChatImage(index - 1) : null,
+                    onNext: index < images.length - 1 ? () => showChatImage(index + 1) : null,
+                },
+            });
+        };
+
+        showChatImage(initialIndex);
     });
 }
 

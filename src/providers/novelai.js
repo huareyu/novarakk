@@ -154,11 +154,13 @@ export class NovelAIProvider extends Provider {
             style,
             referencesEnabled ? (options.matchedAdditionalRefs || []) : [],
             settings,
-            { includeReferencePromptBlocks: referencesEnabled },
+            { includeReferencePromptBlocks: referencesEnabled && options.includeReferencePromptBlocks !== false },
         );
         fullPrompt = applyNovelaiPresets(fullPrompt, settings);
         if (references.length > 0) {
-            const instruction = getEffectiveRefInstruction(settings);
+            const instruction = typeof options.referenceInstruction === 'string'
+                ? options.referenceInstruction
+                : getEffectiveRefInstruction(settings);
             if (instruction) fullPrompt = `${instruction}\n\n${fullPrompt}`;
         }
 

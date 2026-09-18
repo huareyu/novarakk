@@ -442,6 +442,27 @@ export function buildApiSettingsSectionHtml(settings = getSettings()) {
                 </div>
             </div>
 
+            <div class="iig-settings-card-nested iig-api-display-options">
+                <h4>${t`Generated image display`}</h4>
+                <div class="flex-row">
+                    <label for="iig_image_action_position">${t`Image button corner`}</label>
+                    <select id="iig_image_action_position" class="flex1">
+                        <option value="top-right" ${settings.imageActionPosition === 'top-right' ? 'selected' : ''}>${t`Top right`}</option>
+                        <option value="top-left" ${settings.imageActionPosition === 'top-left' ? 'selected' : ''}>${t`Top left`}</option>
+                        <option value="bottom-right" ${settings.imageActionPosition === 'bottom-right' ? 'selected' : ''}>${t`Bottom right`}</option>
+                        <option value="bottom-left" ${settings.imageActionPosition === 'bottom-left' ? 'selected' : ''}>${t`Bottom left`}</option>
+                    </select>
+                </div>
+                <label class="checkbox_label" title="${t`Newly generated images stay blurred until you click them.`}">
+                    <input type="checkbox" id="iig_censor_on_generate" ${settings.censorOnGenerate ? 'checked' : ''}>
+                    <span>${t`Enable blurred previews`}</span>
+                </label>
+                <label class="checkbox_label" title="${t`Show a random decorative error image when generation fails.`}">
+                    <input type="checkbox" id="iig_pretty_error_images" ${settings.prettyErrorImages ? 'checked' : ''}>
+                    <span>${t`Enable illustrated errors`}</span>
+                </label>
+            </div>
+
             <div class="iig-settings-card-nested" id="iig_vision_section">
                 <div class="iig-vision-head" data-iig-vision-toggle>
                     <h4>${t`Vision (outfit descriptions)`}</h4>
@@ -505,6 +526,9 @@ function applyProfileValuesToInputs(settings) {
     setVal('iig_api_type', settings.apiType);
     setVal('iig_endpoint', settings.endpoint);
     setChk('iig_raw_endpoint', settings.rawEndpoint);
+    setChk('iig_censor_on_generate', settings.censorOnGenerate);
+    setChk('iig_pretty_error_images', settings.prettyErrorImages);
+    setVal('iig_image_action_position', settings.imageActionPosition || 'top-right');
     setVal('iig_api_key', settings.apiKey);
     setVal('iig_model', settings.model);
     // Select holds model too — add option on-the-fly if profile's model isn't
@@ -666,6 +690,28 @@ export function bindApiSectionEvents(settings, updateVisibility) {
 
     document.getElementById('iig_external_blocks')?.addEventListener('change', (e) => {
         settings.externalBlocks = e.target.checked;
+        saveSettings();
+    });
+
+    document.getElementById('iig_censor_on_generate')?.addEventListener('change', (e) => {
+        settings.censorOnGenerate = e.target.checked;
+        if (!settings.censorOnGenerate) {
+            document.querySelectorAll('#chat .iig-img-host.iig-censored')
+                .forEach((host) => host.classList.remove('iig-censored'));
+        }
+        saveSettings();
+    });
+
+    document.getElementById('iig_pretty_error_images')?.addEventListener('change', (e) => {
+        settings.prettyErrorImages = e.target.checked;
+        saveSettings();
+    });
+
+    document.getElementById('iig_image_action_position')?.addEventListener('change', (e) => {
+        const allowed = ['top-right', 'top-left', 'bottom-right', 'bottom-left'];
+        settings.imageActionPosition = allowed.includes(e.target.value) ? e.target.value : 'top-right';
+        document.querySelectorAll('#chat .iig-img-actions')
+            .forEach((actions) => { actions.dataset.position = settings.imageActionPosition; });
         saveSettings();
     });
 

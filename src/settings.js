@@ -66,6 +66,9 @@ export function exportLogs() {
 export const defaultSettings = Object.freeze({
     enabled: true,
     externalBlocks: false,
+    censorOnGenerate: false,
+    prettyErrorImages: false,
+    imageActionPosition: 'top-right',
     imageContextEnabled: false,
     imageContextCount: 1,
     styles: [],

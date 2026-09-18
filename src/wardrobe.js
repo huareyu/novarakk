@@ -854,6 +854,9 @@ const SW_DEFAULT_TRYON_PROMPT =
     + ' Natural relaxed standing pose facing the viewer, the entire figure visible from head to shoes, simple uncluttered background that does not distract from the character.'
     + ' {{outfit}}';
 
+const SW_WARDROBE_REF_INSTRUCTION =
+    '[WARDROBE EDIT — reference roles are strict. Image 1 is the PERSON IDENTITY reference only: copy the face, hair, skin, body proportions and art style, but COMPLETELY IGNORE AND REMOVE every garment, accessory and shoe worn in Image 1. Never layer, merge or duplicate that old clothing. Image 2 and any later images are OUTFIT references and are the only visual source for clothing. If no outfit image is supplied, clothing must come only from the written outfit description.]';
+
 const SW_DEFAULT_GENLOOK_PROMPT =
     'Virtual outfit design. Generate a FULL-BODY, head-to-toe image of {{name}} — the exact person from the {{personRef}} image — wearing a NEW outfit that matches the text description below.'
     + ' Keep the face, hairstyle, hair color, eye color, skin tone and body proportions identical to the person reference.'
@@ -1138,6 +1141,8 @@ async function swGenerateWardrobeImage(side, extraReferences, prompt) {
             aspectRatio: '2:3',
             imageSize: swGetSettings().generationImageSize || undefined,
             providerSettings: settings,
+            includeReferencePromptBlocks: false,
+            referenceInstruction: SW_WARDROBE_REF_INSTRUCTION,
         },
     });
 

@@ -20,6 +20,7 @@ import {
     saveImageToFile,
     saveNaisteraMediaToFile,
     ERROR_IMAGE_PATH,
+    pickRandomErrorImagePath,
     decodeHtmlEntities,
     parseImageDataUrl,
     ProviderError,
@@ -334,10 +335,14 @@ export function clearLoadingPlaceholderTimer(placeholder) {
     }
 }
 
-export function createErrorPlaceholder(tagId, errorMessage, tagInfo, friendlyInfo = null) {
+function getErrorImagePath(settings = getSettings()) {
+    return settings.prettyErrorImages ? pickRandomErrorImagePath() : ERROR_IMAGE_PATH;
+}
+
+export function createErrorPlaceholder(tagId, errorMessage, tagInfo, friendlyInfo = null, imagePath = getErrorImagePath()) {
     const img = document.createElement('img');
     img.className = 'iig-error-image';
-    img.src = ERROR_IMAGE_PATH;
+    img.src = imagePath;
     img.alt = friendlyInfo?.title || t`Generation error`;
     // Tooltip: дружелюбный заголовок + сырой текст для отладки.
     const tooltip = friendlyInfo
@@ -747,13 +752,14 @@ export async function processMessageTags(messageId) {
                 ? { title: t`Generation cancelled`, message: t`Generation was cancelled by the user.`, detail: '' }
                 : formatProviderError(error);
 
-            const errorPlaceholder = createErrorPlaceholder(tagId, error.message, tag, friendly);
+            const errorImagePath = getErrorImagePath();
+            const errorPlaceholder = createErrorPlaceholder(tagId, error.message, tag, friendly, errorImagePath);
             errorPlaceholder.dataset.iigTagIndex = String(index);
             loadingPlaceholder.replaceWith(errorPlaceholder);
 
             // IMPORTANT: Mark tag as failed in message.mes so it displays after swipe.
             if (tag.isNewFormat) {
-                const errorTag = tag.fullMatch.replace(/src\s*=\s*(['"])[^'"]*\1/i, `src="${ERROR_IMAGE_PATH}"`);
+                const errorTag = tag.fullMatch.replace(/src\s*=\s*(['"])[^'"]*\1/i, `src="${errorImagePath}"`);
                 replaceTagInMessageSource(message, tag, errorTag);
             } else {
                 const errorMarker = `[IMG:ERROR:${error.message.substring(0, 50)}]`;

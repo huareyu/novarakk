@@ -247,13 +247,17 @@ export class GeminiProvider extends Provider {
             }
         });
 
-        let fullPrompt = buildFinalGenerationPrompt(prompt, style, options.matchedAdditionalRefs || [], settings);
+        let fullPrompt = buildFinalGenerationPrompt(prompt, style, options.matchedAdditionalRefs || [], settings, {
+            includeReferencePromptBlocks: options.includeReferencePromptBlocks !== false,
+        });
 
         if (references.length > 0) {
             const labelBlock = labelLines.length > 0
                 ? `${labelLines.join('\n')}\nGenerate the scene below. Keep all faces and outfits faithful to the references.`
                 : '';
-            const refInstruction = getEffectiveRefInstruction(settings);
+            const refInstruction = typeof options.referenceInstruction === 'string'
+                ? options.referenceInstruction
+                : getEffectiveRefInstruction(settings);
             fullPrompt = [refInstruction, labelBlock, fullPrompt].filter(Boolean).join('\n\n');
         }
 

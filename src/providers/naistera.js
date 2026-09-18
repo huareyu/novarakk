@@ -176,10 +176,14 @@ export class NaisteraProvider extends Provider {
         const preset = options.preset || null;
         const wantsVideoTest = Boolean(options.videoTestMode);
         const videoEveryN = normalizeNaisteraVideoFrequency(options.videoEveryN ?? settings.naisteraVideoEveryN);
-        let fullPrompt = buildFinalGenerationPrompt(prompt, style, options.matchedAdditionalRefs || [], settings);
+        let fullPrompt = buildFinalGenerationPrompt(prompt, style, options.matchedAdditionalRefs || [], settings, {
+            includeReferencePromptBlocks: options.includeReferencePromptBlocks !== false,
+        });
 
         if (references.length > 0) {
-            const refInstruction = getEffectiveRefInstruction(settings);
+            const refInstruction = typeof options.referenceInstruction === 'string'
+                ? options.referenceInstruction
+                : getEffectiveRefInstruction(settings);
             if (refInstruction) {
                 fullPrompt = `${refInstruction}\n\n${fullPrompt}`;
             }

@@ -250,9 +250,13 @@ export class VoidProvider extends Provider {
         const url = buildGenerationUrl(settings, '/v1/chat/completions');
         const model = settings.model;
 
-        let fullPrompt = buildFinalGenerationPrompt(prompt, style, options.matchedAdditionalRefs || [], settings);
+        let fullPrompt = buildFinalGenerationPrompt(prompt, style, options.matchedAdditionalRefs || [], settings, {
+            includeReferencePromptBlocks: options.includeReferencePromptBlocks !== false,
+        });
         if (references.length > 0) {
-            const refInstruction = getEffectiveRefInstruction(settings);
+            const refInstruction = typeof options.referenceInstruction === 'string'
+                ? options.referenceInstruction
+                : getEffectiveRefInstruction(settings);
             if (refInstruction) {
                 fullPrompt = `${refInstruction}\n\n${fullPrompt}`;
             }

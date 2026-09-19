@@ -37,7 +37,11 @@ export function initImageActions() {
             scanAndAttach(el);
         }
     });
-    observer.observe(chat, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'class'] });
+    // `class` changes are extremely frequent in long/streaming chats and our
+    // own censor state already synchronizes its button explicitly. Watching
+    // only image source replacements keeps rerolls working without rescanning
+    // messages for unrelated hover/animation/layout class changes.
+    observer.observe(chat, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
 }
 
 function scanAndAttach(root) {

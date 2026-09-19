@@ -375,7 +375,7 @@ export function getActiveConnectionProfile(settings = getSettings()) {
 export function migrateConnectionProfilesFromLegacy(settings = getSettings()) {
     ensureConnectionProfiles(settings);
     if (settings.connectionProfiles.length > 0) {
-        return;
+        return false;
     }
     const id = makeProfileId();
     settings.connectionProfiles.push({
@@ -384,6 +384,7 @@ export function migrateConnectionProfilesFromLegacy(settings = getSettings()) {
         ...extractConnectionFields(settings),
     });
     settings.activeConnectionProfileId = id;
+    return true;
 }
 
 /**
@@ -567,6 +568,72 @@ export function getSettings() {
 export function saveSettings() {
     const context = SillyTavern.getContext();
     context.saveSettingsDebounced();
+}
+
+/**
+ * Removes obsolete embedded image copies that are no longer consumed by the
+ * current character library / wardrobe implementation. Old avatar data is
+ * cleared only after every image-bearing entry is confirmed as migrated and
+ * no legacy avatar is still selected. An interrupted or partial migration
+ * therefore leaves the source data untouched.
+ */
+export function cleanupObsoleteEmbeddedMedia(settings = getSettings()) {
+    const report = {
+        changed: false,
+        avatars: 0,
+        wardrobe: 0,
+        hairstyles: 0,
+        avatarsDeferred: false,
+    };
+
+    const legacyAvatars = Array.isArray(settings.avatarItems) ? settings.avatarItems : [];
+    if (legacyAvatars.length > 0) {
+        const migratedIds = new Set(
+            (Array.isArray(settings.legacyAvatarLibraryMigratedIds)
+                ? settings.legacyAvatarLibraryMigratedIds
+                : [])
+                .map(id => String(id || '').trim())
+                .filter(Boolean),
+        );
+        const imageEntries = legacyAvatars.filter(item => String(item?.imageData || '').trim());
+        const allImagesMigrated = imageEntries.every(item => {
+            const id = String(item?.id || '').trim();
+            return Boolean(id) && migratedIds.has(id);
+        });
+        const legacySelectionInactive = !settings.activeAvatarChar && !settings.activeAvatarUser;
+
+        if (allImagesMigrated && legacySelectionInactive) {
+            report.avatars = legacyAvatars.length;
+            settings.avatarItems = [];
+            report.changed = true;
+        } else {
+            report.avatarsDeferred = true;
+        }
+    }
+
+    // These arrays belonged to superseded UI implementations. The live
+    // wardrobe is stored under extension_settings.silly_wardrobe instead.
+    if (Array.isArray(settings.swItems) && settings.swItems.length > 0) {
+        report.wardrobe = settings.swItems.length;
+        settings.swItems = [];
+        report.changed = true;
+    }
+    if (Array.isArray(settings.hairstyleItems) && settings.hairstyleItems.length > 0) {
+        report.hairstyles = settings.hairstyleItems.length;
+        settings.hairstyleItems = [];
+        report.changed = true;
+    }
+
+    if (report.changed) {
+        iigLog(
+            'INFO',
+            `Removed obsolete embedded media: avatars=${report.avatars}, wardrobe=${report.wardrobe}, hairstyles=${report.hairstyles}`,
+        );
+    }
+    if (report.avatarsDeferred) {
+        iigLog('WARN', 'Legacy avatar cleanup deferred until every avatar is safely migrated and inactive');
+    }
+    return report;
 }
 
 // ----- Naistera helpers (знают про настройки, но не про провайдеров) -----
@@ -1166,7 +1233,7 @@ export function migrateAdditionalReferencesToLorebook(settings = getSettings()) 
     const legacyRefs = Array.isArray(settings.additionalReferences) ? settings.additionalReferences : [];
     if (legacyRefs.length === 0) {
         settings.additionalReferences = [];
-        return;
+        return false;
     }
 
     // Переливаем в refs первого лорбука (обычно «My library»). Существующие
@@ -1180,6 +1247,7 @@ export function migrateAdditionalReferencesToLorebook(settings = getSettings()) 
     // Очищаем legacy-поле после успешной миграции.
     settings.additionalReferences = [];
     iigLog('INFO', `Migrated ${migrated.length} additional references to lorebook "${target.name}"`);
+    return true;
 }
 
 /**

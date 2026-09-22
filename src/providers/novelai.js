@@ -111,18 +111,18 @@ export class NovelAIProvider extends Provider {
         return settings.novelaiEnableReferences !== false && supportsPreciseReference;
     }
 
-    async collectReferences({ prompt = '', messageId, matchedAdditionalRefs = [] }) {
-        const settings = getSettings();
+    async collectReferences({ prompt = '', messageId, matchedAdditionalRefs = [], providerOptions = {} }) {
+        const settings = providerOptions.providerSettings || getSettings();
         if (settings.novelaiEnableReferences === false) return [];
 
         const maxRefs = MAX_GENERATION_REFERENCE_IMAGES;
         const refs = [];
         const avatarGroups = [];
-        if (settings.sendCharAvatar) avatarGroups.push(await collectAvatarReferences('bot', 'base64', prompt));
-        if (settings.sendUserAvatar) avatarGroups.push(await collectAvatarReferences('user', 'base64', prompt));
+        if (settings.sendCharAvatar) avatarGroups.push(await collectAvatarReferences('bot', 'base64', prompt, settings));
+        if (settings.sendUserAvatar) avatarGroups.push(await collectAvatarReferences('user', 'base64', prompt, settings));
         refs.push(...mergeAvatarReferenceGroups(avatarGroups, maxRefs));
 
-        for (const extra of await collectExtraReferences(prompt, 'base64')) {
+        for (const extra of await collectExtraReferences(prompt, 'base64', settings)) {
             if (refs.length >= maxRefs) break;
             refs.push(extra);
         }

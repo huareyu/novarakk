@@ -66,6 +66,12 @@ export function exportLogs() {
 export const defaultSettings = Object.freeze({
     enabled: true,
     externalBlocks: false,
+    extBlocksProfileRoutingEnabled: false,
+    extBlocksProfileBindings: {
+        big: '',
+        medium: '',
+        small: '',
+    },
     censorOnGenerate: false,
     prettyErrorImages: false,
     imageActionPosition: 'top-right',
@@ -388,6 +394,24 @@ export function migrateConnectionProfilesFromLegacy(settings = getSettings()) {
 }
 
 /**
+ * Returns a non-mutating settings view with connection fields taken from the
+ * requested profile. It is used for one-off routed generations (for example,
+ * an ExtBlocks preset) without switching the profile selected in the UI.
+ */
+export function buildConnectionProfileSettings(profileId, settings = getSettings()) {
+    const targetId = String(profileId || '').trim();
+    if (!targetId) return settings;
+    const profile = ensureConnectionProfiles(settings).find(item => item.id === targetId);
+    if (!profile) return settings;
+    return {
+        ...settings,
+        ...profile,
+        connectionProfiles: settings.connectionProfiles,
+        activeConnectionProfileId: profile.id,
+    };
+}
+
+/**
  * Создаёт новый профиль со snapshot'ом текущих connection-полей.
  * Активным становится новый профиль. Возвращает созданный профиль.
  */
@@ -450,6 +474,13 @@ export function removeConnectionProfile(profileId, settings = getSettings()) {
     profiles.splice(index, 1);
     if (settings.activeConnectionProfileId === profileId) {
         settings.activeConnectionProfileId = profiles[0]?.id || '';
+    }
+    if (settings.extBlocksProfileBindings && typeof settings.extBlocksProfileBindings === 'object') {
+        for (const preset of ['big', 'medium', 'small']) {
+            if (settings.extBlocksProfileBindings[preset] === profileId) {
+                settings.extBlocksProfileBindings[preset] = '';
+            }
+        }
     }
     return true;
 }
@@ -560,11 +591,18 @@ export function getSettings() {
         }
     }
 
-    migrateNovelaiPresetsFormat(context.extensionSettings[MODULE_NAME]);
+    const settings = context.extensionSettings[MODULE_NAME];
+    const rawExtBlocksBindings = settings.extBlocksProfileBindings;
+    settings.extBlocksProfileBindings = {
+        big: String(rawExtBlocksBindings?.big || ''),
+        medium: String(rawExtBlocksBindings?.medium || ''),
+        small: String(rawExtBlocksBindings?.small || ''),
+    };
 
-    return context.extensionSettings[MODULE_NAME];
+    migrateNovelaiPresetsFormat(settings);
+
+    return settings;
 }
-
 export function saveSettings() {
     const context = SillyTavern.getContext();
     context.saveSettingsDebounced();

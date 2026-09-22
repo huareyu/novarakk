@@ -494,5 +494,12 @@
     "Negative preset saved": "Шаблон негатива сохранён",
     "Delete negative preset": "Удалить шаблон негатива",
     "Delete preset \"${0}\"?": "Удалить шаблон «${0}»?",
-    "(no presets)": "(нет шаблонов)"
+    "(no presets)": "(нет шаблонов)",
+    "Active profile": "Активный профиль",
+    "Separate image profiles for ExtBlocks presets": "Отдельные профили картинок для пресетов ExtBlocks",
+    "Large preset": "Большой пресет",
+    "Medium preset": "Средний пресет",
+    "Small preset": "Маленький пресет",
+    "An image tag inside an external block uses the profile assigned to that block's Small, Medium, or Large preset. Unassigned presets use the active profile.": "Тег картинки во внешнем блоке использует профиль, назначенный маленькому, среднему или большому пресету этого блока. Если профиль не назначен, используется активный профиль.",
+    "A connection profile stores the API type, endpoint, key, model, image size and quality settings, plus provider-specific reference options. Styles, lorebooks, NPCs and wardrobe data remain shared.": "В профиле сохраняются тип API, endpoint, ключ, модель, размер и качество изображения, а также настройки референсов конкретного провайдера. Стили, лорбуки, NPC и данные гардероба остаются общими."
 }

@@ -125,6 +125,53 @@ function buildConnectionProfilesBlockHtml(settings = getSettings()) {
                     </div>
                 </div>
             </div>
+            <p class="hint">${t`A connection profile stores the API type, endpoint, key, model, image size and quality settings, plus provider-specific reference options. Styles, lorebooks, NPCs and wardrobe data remain shared.`}</p>
+        </div>
+    `;
+}
+
+function buildExtBlocksProfileOptionsHtml(settings, selectedId) {
+    const activeLabel = t`Active profile`;
+    const profileOptions = ensureConnectionProfiles(settings).map((profile) => {
+        const model = profile.apiType === 'naistera'
+            ? profile.naisteraModel
+            : profile.apiType === 'novelai'
+                ? (profile.novelaiCustomModel || profile.novelaiModel)
+                : profile.model;
+        const details = [profile.apiType, model].filter(Boolean).join(' · ');
+        const label = details ? `${profile.name} — ${details}` : profile.name;
+        return `<option value="${sanitizeForHtml(profile.id)}" ${profile.id === selectedId ? 'selected' : ''}>${sanitizeForHtml(label)}</option>`;
+    }).join('');
+    return `<option value="" ${selectedId ? '' : 'selected'}>${activeLabel}</option>${profileOptions}`;
+}
+
+function buildExtBlocksProfileRoutingHtml(settings) {
+    const bindings = settings.extBlocksProfileBindings || {};
+    const hidden = settings.externalBlocks && settings.extBlocksProfileRoutingEnabled ? '' : 'iig-hidden';
+    const rows = [
+        ['big', t`Large preset`],
+        ['medium', t`Medium preset`],
+        ['small', t`Small preset`],
+    ].map(([preset, label]) => `
+        <div class="flex-row">
+            <label for="iig_extblocks_profile_${preset}">${label}</label>
+            <select id="iig_extblocks_profile_${preset}" class="flex1" data-iig-extblocks-profile="${preset}">
+                ${buildExtBlocksProfileOptionsHtml(settings, bindings[preset] || '')}
+            </select>
+            <div></div>
+        </div>
+    `).join('');
+
+    return `
+        <div class="iig-settings-card-nested" id="iig_extblocks_profile_routing">
+            <label class="checkbox_label">
+                <input type="checkbox" id="iig_extblocks_profile_routing_enabled" ${settings.extBlocksProfileRoutingEnabled ? 'checked' : ''}>
+                <span>${t`Separate image profiles for ExtBlocks presets`}</span>
+            </label>
+            <div id="iig_extblocks_profile_routing_fields" class="${hidden}">
+                <p class="hint">${t`An image tag inside an external block uses the profile assigned to that block's Small, Medium, or Large preset. Unassigned presets use the active profile.`}</p>
+                ${rows}
+            </div>
         </div>
     `;
 }
@@ -142,6 +189,7 @@ export function buildApiSettingsSectionHtml(settings = getSettings()) {
                 <input type="checkbox" id="iig_external_blocks" ${settings.externalBlocks ? 'checked' : ''}>
                 <span>${t`Process external blocks`}</span>
             </label>
+            ${buildExtBlocksProfileRoutingHtml(settings)}
 
             <div class="flex-row">
                 <label for="iig_api_type">${t`API type`}</label>
@@ -613,6 +661,26 @@ function refreshProfileSelectOptions(settings) {
     select.innerHTML = profiles.map((p) =>
         `<option value="${p.id}" ${p.id === settings.activeConnectionProfileId ? 'selected' : ''}>${sanitizeForHtml(p.name)}</option>`,
     ).join('') || `<option value="">${t`(no profiles)`}</option>`;
+    refreshExtBlocksProfileSelectOptions(settings);
+}
+
+function refreshExtBlocksProfileSelectOptions(settings) {
+    document.querySelectorAll('[data-iig-extblocks-profile]').forEach((element) => {
+        if (!(element instanceof HTMLSelectElement)) return;
+        const preset = element.dataset.iigExtblocksProfile;
+        element.innerHTML = buildExtBlocksProfileOptionsHtml(
+            settings,
+            settings.extBlocksProfileBindings?.[preset] || '',
+        );
+    });
+}
+
+function syncExtBlocksProfileRoutingVisibility(settings) {
+    const fields = document.getElementById('iig_extblocks_profile_routing_fields');
+    fields?.classList.toggle(
+        'iig-hidden',
+        !settings.externalBlocks || !settings.extBlocksProfileRoutingEnabled,
+    );
 }
 
 export function bindConnectionProfilesEvents(settings, updateVisibility) {
@@ -691,6 +759,24 @@ export function bindApiSectionEvents(settings, updateVisibility) {
     document.getElementById('iig_external_blocks')?.addEventListener('change', (e) => {
         settings.externalBlocks = e.target.checked;
         saveSettings();
+        syncExtBlocksProfileRoutingVisibility(settings);
+    });
+
+    document.getElementById('iig_extblocks_profile_routing_enabled')?.addEventListener('change', (e) => {
+        settings.extBlocksProfileRoutingEnabled = e.target.checked;
+        saveSettings();
+        syncExtBlocksProfileRoutingVisibility(settings);
+    });
+
+    document.querySelectorAll('[data-iig-extblocks-profile]').forEach((element) => {
+        element.addEventListener('change', (e) => {
+            const select = e.currentTarget;
+            if (!(select instanceof HTMLSelectElement)) return;
+            const preset = select.dataset.iigExtblocksProfile;
+            if (!['big', 'medium', 'small'].includes(preset)) return;
+            settings.extBlocksProfileBindings[preset] = select.value;
+            saveSettings();
+        });
     });
 
     document.getElementById('iig_censor_on_generate')?.addEventListener('change', (e) => {

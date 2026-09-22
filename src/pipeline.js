@@ -45,7 +45,18 @@ import {
     validateSettings,
 } from './providers.js';
 import { buildActiveCharacterLibraryPromptBlock, getReferenceDescription, getReferenceImage, getReferenceSource, recordCharacterGeneration } from './references.js';
+import { resolveExtBlocksImageRoute } from './extBlocksIntegration.js';
 import { t } from './i18n.js';
+
+function buildTagGenerationOptions(message, tag, settings, options) {
+    const route = resolveExtBlocksImageRoute(message, tag, settings);
+    if (!route) return options;
+    return {
+        ...options,
+        providerSettings: route.providerSettings,
+        extBlocksPreset: route.preset,
+    };
+}
 
 // ----- Friendly error classification -----
 
@@ -414,9 +425,8 @@ export async function persistGeneratedMedia(generated, statusEl, meta) {
 // ----- Main generate (provider dispatch + retry loop) -----
 
 export async function generateImageWithRetry(prompt, style, onStatusUpdate, options = {}) {
-    validateSettings();
-
-    const settings = getSettings();
+    const settings = options.providerSettings || getSettings();
+    validateSettings(settings);
     const provider = resolveActiveProvider(settings);
     if (!provider) {
         throw new Error(t`Unknown API: ${settings.apiType}`);
@@ -710,7 +720,14 @@ export async function processMessageTags(messageId) {
                 tag.prompt,
                 tag.style,
                 (status) => { statusEl.textContent = status; },
-                { aspectRatio: tag.aspectRatio, imageSize: tag.imageSize, quality: tag.quality, preset: tag.preset, messageId, signal: getLoadingSignal(loadingPlaceholder) }
+                buildTagGenerationOptions(message, tag, settings, {
+                    aspectRatio: tag.aspectRatio,
+                    imageSize: tag.imageSize,
+                    quality: tag.quality,
+                    preset: tag.preset,
+                    messageId,
+                    signal: getLoadingSignal(loadingPlaceholder),
+                })
             );
             finishLoadingGeneration(loadingPlaceholder);
             clearLoadingPlaceholderTimer(loadingPlaceholder);
@@ -900,7 +917,14 @@ export async function regenerateSingleTag(messageId, tagIndex, instructionValue 
             tag.prompt,
             tag.style,
             (status) => { statusEl.textContent = status; },
-            { aspectRatio: tag.aspectRatio, imageSize: tag.imageSize, quality: tag.quality, preset: tag.preset, messageId, signal: getLoadingSignal(loadingPlaceholder) }
+            buildTagGenerationOptions(message, tag, settings, {
+                aspectRatio: tag.aspectRatio,
+                imageSize: tag.imageSize,
+                quality: tag.quality,
+                preset: tag.preset,
+                messageId,
+                signal: getLoadingSignal(loadingPlaceholder),
+            })
         );
         finishLoadingGeneration(loadingPlaceholder);
         clearLoadingPlaceholderTimer(loadingPlaceholder);
@@ -1024,7 +1048,14 @@ export async function regenerateMessageImages(messageId) {
                         tag.prompt,
                         tag.style,
                         (status) => { statusEl.textContent = status; },
-                        { aspectRatio: tag.aspectRatio, imageSize: tag.imageSize, quality: tag.quality, preset: tag.preset, messageId, signal: getLoadingSignal(loadingPlaceholder) }
+                        buildTagGenerationOptions(message, tag, settings, {
+                            aspectRatio: tag.aspectRatio,
+                            imageSize: tag.imageSize,
+                            quality: tag.quality,
+                            preset: tag.preset,
+                            messageId,
+                            signal: getLoadingSignal(loadingPlaceholder),
+                        })
                     );
                     finishLoadingGeneration(loadingPlaceholder);
                     clearLoadingPlaceholderTimer(loadingPlaceholder);

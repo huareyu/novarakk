@@ -107,8 +107,8 @@ export class GeminiProvider extends Provider {
      * Подписи критичны: с 3-4 безымянными картинками (лицо + аутфиты) модель
      * нестабильно понимает, кто есть кто, и «теряет» референсы.
      */
-    async collectReferences({ prompt = '', messageId, matchedAdditionalRefs = [] }) {
-        const settings = getSettings();
+    async collectReferences({ prompt = '', messageId, matchedAdditionalRefs = [], providerOptions = {} }) {
+        const settings = providerOptions.providerSettings || getSettings();
         const context = SillyTavern.getContext();
         const caps = getGeminiCapabilities(settings.model);
         const maxRefs = caps.maxReferences;
@@ -122,7 +122,7 @@ export class GeminiProvider extends Provider {
 
         const avatarGroups = [];
         if (settings.sendCharAvatar && await shouldSendCharacterLibraryReference('char', prompt, settings)) {
-            const override = await getWardrobeAvatarOverrideBase64('bot');
+            const override = await getWardrobeAvatarOverrideBase64('bot', settings);
             const libraryRefs = override
                 ? [makeReferenceObject(override, '', 'char')]
                 : await collectCharacterLibraryReferences('char', 'base64', settings);
@@ -132,7 +132,7 @@ export class GeminiProvider extends Provider {
             }));
         }
         if (settings.sendUserAvatar && await shouldSendCharacterLibraryReference('user', prompt, settings)) {
-            const override = await getWardrobeAvatarOverrideBase64('user');
+            const override = await getWardrobeAvatarOverrideBase64('user', settings);
             const libraryRefs = override
                 ? [makeReferenceObject(override, '', 'user')]
                 : await collectCharacterLibraryReferences('user', 'base64', settings);
@@ -143,7 +143,7 @@ export class GeminiProvider extends Provider {
         }
         refs.push(...mergeAvatarReferenceGroups(avatarGroups, maxRefs));
 
-        for (const extra of await collectExtraReferenceObjects(prompt, 'base64')) {
+        for (const extra of await collectExtraReferenceObjects(prompt, 'base64', settings)) {
             if (refs.length >= maxRefs) break;
             let description = '';
             if (extra.kind === 'npc') {

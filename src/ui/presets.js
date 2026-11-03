@@ -205,6 +205,9 @@ function createPresetSectionUI(cfg) {
         if (tagMgr && !tagMgr.classList.contains('iig-hidden')) {
             tagMgr.innerHTML = buildTagManagerHtml(settings);
         }
+        if (['style', 'prefix', 'suffix'].includes(p)) {
+            document.dispatchEvent(new Event('iig-prompt-presets-changed'));
+        }
     }
 
     function buildSectionHtml() {
@@ -226,6 +229,12 @@ function createPresetSectionUI(cfg) {
     }
 
     function bindEvents(settings) {
+        // Refresh binding names after an inline rename is committed.
+        if (['style', 'prefix', 'suffix'].includes(p)) {
+            document.getElementById(id('editor'))?.addEventListener('change', () => {
+                document.dispatchEvent(new Event('iig-prompt-presets-changed'));
+            });
+        }
         if (showBrowse) {
             document.getElementById(id('pick_site'))?.addEventListener('click', () => openStylePickerModal());
         }

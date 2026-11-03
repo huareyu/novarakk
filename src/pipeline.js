@@ -48,8 +48,7 @@ import { buildActiveCharacterLibraryPromptBlock, getReferenceDescription, getRef
 import { resolveExtBlocksImageRoute } from './extBlocksIntegration.js';
 import { t } from './i18n.js';
 
-function buildTagGenerationOptions(message, tag, settings, options) {
-    const route = resolveExtBlocksImageRoute(message, tag, settings);
+function buildTagGenerationOptions(route, options) {
     if (!route) return options;
     return {
         ...options,
@@ -618,7 +617,8 @@ export async function processMessageTags(messageId) {
 
     const processTag = async (tag, index) => {
         const tagId = `iig-${messageId}-${index}`;
-        applyConfiguredStyleToTag(tag, settings);
+        const tagRoute = resolveExtBlocksImageRoute(message, tag, settings);
+        applyConfiguredStyleToTag(tag, tagRoute?.providerSettings || settings);
 
         iigLog('INFO', `Processing tag ${index}: ${tag.fullMatch.substring(0, 50)}`);
 
@@ -720,7 +720,7 @@ export async function processMessageTags(messageId) {
                 tag.prompt,
                 tag.style,
                 (status) => { statusEl.textContent = status; },
-                buildTagGenerationOptions(message, tag, settings, {
+                buildTagGenerationOptions(tagRoute, {
                     aspectRatio: tag.aspectRatio,
                     imageSize: tag.imageSize,
                     quality: tag.quality,
@@ -885,7 +885,8 @@ export async function regenerateSingleTag(messageId, tagIndex, instructionValue 
 
     const tag = tags[sourceTagIndex];
     const tagId = `iig-regen-${messageId}-${domTagIndex}`;
-    applyConfiguredStyleToTag(tag, settings);
+    const tagRoute = resolveExtBlocksImageRoute(message, tag, settings);
+    applyConfiguredStyleToTag(tag, tagRoute?.providerSettings || settings);
     let loadingPlaceholder = null;
     let existingMedia = null;
     let succeeded = false;
@@ -917,7 +918,7 @@ export async function regenerateSingleTag(messageId, tagIndex, instructionValue 
             tag.prompt,
             tag.style,
             (status) => { statusEl.textContent = status; },
-            buildTagGenerationOptions(message, tag, settings, {
+            buildTagGenerationOptions(tagRoute, {
                 aspectRatio: tag.aspectRatio,
                 imageSize: tag.imageSize,
                 quality: tag.quality,
@@ -1023,7 +1024,8 @@ export async function regenerateMessageImages(messageId) {
                 continue;
             }
             activeSingleTagTasks.add(taskKey);
-            applyConfiguredStyleToTag(tag, settings);
+            const tagRoute = resolveExtBlocksImageRoute(message, tag, settings);
+            applyConfiguredStyleToTag(tag, tagRoute?.providerSettings || settings);
 
             try {
                 // Find the existing rendered media element with data-iig-instruction
@@ -1048,7 +1050,7 @@ export async function regenerateMessageImages(messageId) {
                         tag.prompt,
                         tag.style,
                         (status) => { statusEl.textContent = status; },
-                        buildTagGenerationOptions(message, tag, settings, {
+                        buildTagGenerationOptions(tagRoute, {
                             aspectRatio: tag.aspectRatio,
                             imageSize: tag.imageSize,
                             quality: tag.quality,

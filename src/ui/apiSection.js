@@ -43,6 +43,8 @@ import { buildSettingsSectionHtml } from './common.js';
 import { novelaiPresetSection } from './presets.js';
 import { resolveNovelaiModel, getNovelaiModelCapabilities } from '../providers/novelaiParams.js';
 import { renderParameterHelp, bindParameterHelp } from './parameterHelp.js';
+import { buildExtBlocksPromptRoutingHtml, bindExtBlocksPromptRoutingEvents,
+    syncExtBlocksPromptRoutingVisibility } from './extBlocksPrompts.js';
 
 export function syncNovelaiModelControls(settings) {
     const caps = getNovelaiModelCapabilities(resolveNovelaiModel(settings));
@@ -234,6 +236,7 @@ export function buildApiSettingsSectionHtml(settings = getSettings()) {
                 <span>${t`Process external blocks`}</span>
             </label>
             ${buildExtBlocksProfileRoutingHtml(settings)}
+            ${buildExtBlocksPromptRoutingHtml(settings)}
 
             <div class="flex-row">
                 <label for="iig_api_type">${t`API type`}</label>
@@ -244,7 +247,6 @@ export function buildApiSettingsSectionHtml(settings = getSettings()) {
                     <option value="electronhub" ${settings.apiType === 'electronhub' ? 'selected' : ''}>${t`Electron Hub (/v1/images/*)`}</option>
                     <option value="naistera" ${settings.apiType === 'naistera' ? 'selected' : ''}>${t`Naistera (naistera.org)`}</option>
                     <option value="void" ${settings.apiType === 'void' ? 'selected' : ''}>${t`VoidAI / RouteMyAI (chat-completions)`}</option>
-                    <option value="aigate" ${settings.apiType === 'aigate' ? 'selected' : ''}>${t`AIGate (GPT Image + Gemini)`}</option>
                     <option value="novelai" ${settings.apiType === 'novelai' ? 'selected' : ''}>${t`NovelAI (via ST proxy)`}</option>
                 </select>
                 <div></div>
@@ -328,7 +330,7 @@ export function buildApiSettingsSectionHtml(settings = getSettings()) {
                 <div></div>
             </div>
 
-            <div id="iig_avatar_section" class="iig-settings-card-nested ${settings.apiType !== 'gemini' && settings.apiType !== 'openrouter' && settings.apiType !== 'void' ? 'iig-hidden' : ''}">
+            <div id="iig_avatar_section" class="iig-settings-card-nested ${!['gemini', 'openrouter', 'void'].includes(settings.apiType) ? 'iig-hidden' : ''}">
                 <div class="flex-row">
                     <label for="iig_aspect_ratio">${t`Aspect ratio`}</label>
                     <select id="iig_aspect_ratio" class="flex1">
@@ -734,6 +736,7 @@ function refreshExtBlocksProfileSelectOptions(settings) {
 }
 
 function syncExtBlocksProfileRoutingVisibility(settings) {
+    syncExtBlocksPromptRoutingVisibility(settings);
     const fields = document.getElementById('iig_extblocks_profile_routing_fields');
     fields?.classList.toggle(
         'iig-hidden',
@@ -810,6 +813,7 @@ export function bindConnectionProfilesEvents(settings, updateVisibility) {
 
 export function bindApiSectionEvents(settings, updateVisibility) {
     bindParameterHelp();
+    bindExtBlocksPromptRoutingEvents(settings);
     document.getElementById('iig_enabled')?.addEventListener('change', (e) => {
         settings.enabled = e.target.checked;
         saveSettings();

@@ -95,7 +95,7 @@ export function swGetSettings() {
     if (!s.sharedUserActiveByPersona || typeof s.sharedUserActiveByPersona !== 'object') s.sharedUserActiveByPersona = {};
     if (!s.sharedBotActiveByChat || typeof s.sharedBotActiveByChat !== 'object') s.sharedBotActiveByChat = {};
     if (!s.sharedDeletedSourceIds || typeof s.sharedDeletedSourceIds !== 'object') s.sharedDeletedSourceIds = { bot: [], user: [] };
-    if (s.generationProvider === 'problembo') {
+    if (['problembo', 'wellflow', 'aigate'].includes(s.generationProvider)) {
         s.generationOverrideEnabled = false;
         s.generationProvider = '';
         s.generationProfileId = '';
@@ -1132,7 +1132,7 @@ async function swGenerateWardrobeImage(side, extraReferences, prompt) {
     }
 
     const rawReferences = [personB64, ...extraReferences.filter(Boolean)];
-    const dataUrlProviders = new Set(['openrouter', 'void', 'aigate', 'naistera']);
+    const dataUrlProviders = new Set(['openrouter', 'void', 'naistera']);
     const references = dataUrlProviders.has(provider.id)
         ? rawReferences.map((value) => value.startsWith('data:') ? value : `data:image/png;base64,${value}`)
         : rawReferences.map((value) => value.startsWith('data:') ? value.slice(value.indexOf(',') + 1) : value);

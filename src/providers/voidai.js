@@ -109,7 +109,7 @@ function voidAspectToSize(aspect, imageSize) {
  * OpenAI data[], chat-completion choices (message.images / content-parts /
  * markdown/data-url в тексте), root-fallback и regex по сырому JSON.
  *
- * Экспортируется — AIGate использует как fallback-парсер.
+ * Exported for response-parser reuse and tests.
  */
 export function extractVoidImage(result) {
     const toStr = (v) => (typeof v === 'string' ? v : null);

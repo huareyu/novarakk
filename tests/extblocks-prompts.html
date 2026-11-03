@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../style.css">
+<style>
+body { margin: 0; background: #202020; color: #ddd; font: 16px sans-serif; }
+#panel { box-sizing: border-box; width: min(100%, 600px); margin: 0 auto; padding: 12px; }
+.text_pole { background: #111; color: #ddd; border: 1px solid #666; }
+#result { font-size: 11px; white-space: pre-wrap; }
+</style>
+<main id="panel" class="iig-settings"></main><pre id="result">RUNNING</pre>
+<script type="module">
+import { buildExtBlocksPromptRoutingHtml, bindExtBlocksPromptRoutingEvents,
+    syncExtBlocksPromptRoutingVisibility } from '../src/ui/extBlocksPrompts.js';
+import { createStyle, removeStyle, updateStyle } from '../src/settings.js';
+const check = (value, message) => { if (!value) throw new Error(message); };
+const label = 'Очень длинное название пресета '.repeat(5);
+const item = (id, name = id) => ({ id, name, value: id, tags: [] });
+let saves = 0;
+const settings = { externalBlocks: true, extBlocksPromptRoutingEnabled: true,
+    styles: [item('style', label), item('escaped', '<img id="injected" src=x>')],
+    prefixes: [item('prefix')], suffixes: [item('suffix')],
+    activeStyleId: 'style', activePrefixId: 'prefix', activeSuffixId: 'suffix',
+    extBlocksPromptBindings: { big: { styleId: 'style', prefixId: 'prefix', suffixId: 'suffix' },
+        medium: { styleId: '', prefixId: '', suffixId: '' }, small: { styleId: '', prefixId: '', suffixId: '' } } };
+window.SillyTavern = { getContext: () => ({ extensionSettings: { inline_image_gen: settings },
+    saveSettingsDebounced: () => { saves++; } }) };
+const panel = document.getElementById('panel');
+const requestedWidth = Number(new URLSearchParams(location.search).get('panelWidth')) || innerWidth;
+panel.style.width = `${Math.min(600, innerWidth, requestedWidth)}px`;
+const q = selector => panel.querySelector(selector);
+const choose = (preset, key, value) => {
+    const node = q(`[data-iig-extblocks-prompt-preset="${preset}"][data-iig-extblocks-prompt-kind="${key}"]`);
+    node.value = value; node.dispatchEvent(new Event('change', { bubbles: true }));
+};
+try {
+    panel.innerHTML = buildExtBlocksPromptRoutingHtml(settings);
+    bindExtBlocksPromptRoutingEvents(settings);
+    check(!document.getElementById('injected'), 'preset names must be escaped');
+    check(panel.querySelectorAll('select').length === 9, 'three controls per preset');
+    check(q('input').nextElementSibling.textContent.includes('Отдельные'), 'Russian translations');
+    choose('big', 'prefixId', '__none__'); choose('medium', 'styleId', 'escaped');
+    check(settings.extBlocksPromptBindings.big.prefixId === '__none__', 'none choice saved');
+    check(settings.extBlocksPromptBindings.medium.styleId === 'escaped', 'specific choice saved');
+    check(settings.activePrefixId === 'prefix' && settings.activeStyleId === 'style', 'global selections unchanged');
+    choose('small', 'suffixId', '');
+    check(settings.extBlocksPromptBindings.small.suffixId === '', 'inherit active saved');
+    const enabled = q('#iig_extblocks_prompt_routing_enabled');
+    enabled.click(); check(q('#iig_extblocks_prompt_routing_fields').classList.contains('iig-hidden'), 'master switch hides fields');
+    enabled.click(); check(!q('#iig_extblocks_prompt_routing_fields').classList.contains('iig-hidden'), 'master switch restores fields');
+    settings.externalBlocks = false; syncExtBlocksPromptRoutingVisibility(settings);
+    check(q('#iig_extblocks_prompt_routing_fields').classList.contains('iig-hidden'), 'external-block switch respected');
+    settings.externalBlocks = true; syncExtBlocksPromptRoutingVisibility(settings);
+    const created = createStyle('Новый стиль');
+    document.dispatchEvent(new Event('iig-prompt-presets-changed'));
+    check([...q('#iig_extblocks_prompt_small_styleId').options].some(option => option.value === created.id), 'created style available without reload');
+    choose('small', 'styleId', created.id);
+    updateStyle(created.id, { name: 'Переименованный стиль' });
+    document.dispatchEvent(new Event('iig-prompt-presets-changed'));
+    check(q('#iig_extblocks_prompt_small_styleId').selectedOptions[0].textContent === 'Переименованный стиль', 'rename reflected');
+    removeStyle(created.id); document.dispatchEvent(new Event('iig-prompt-presets-changed'));
+    check(q('#iig_extblocks_prompt_small_styleId').selectedOptions[0].textContent.includes('удалён'), 'deleted selection shows safe fallback');
+    const beforeBind = saves;
+    bindExtBlocksPromptRoutingEvents(settings); bindExtBlocksPromptRoutingEvents(settings);
+    choose('big', 'prefixId', 'prefix');
+    check(saves === beforeBind + 1, 'rebind must not duplicate event listeners');
+    for (const details of panel.querySelectorAll('details')) details.open = true;
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    for (const select of panel.querySelectorAll('select')) {
+        const rect = select.getBoundingClientRect();
+        const bounds = panel.getBoundingClientRect();
+        check(rect.width > 40 && rect.left >= bounds.left && rect.right <= bounds.right + 1, 'select fits settings panel');
+        check(rect.height >= 43, 'touch target size');
+    }
+    check(document.documentElement.scrollWidth <= innerWidth + 1, 'no horizontal overflow with long names');
+    check(panel.getBoundingClientRect().width <= requestedWidth + 1, 'mobile panel width really emulated');
+    document.getElementById('result').textContent = 'PASS: nine selectors, translations, active/none/specific choices, independent bindings, switches, create/rename/delete refresh, rebind, escaping, mobile layout';
+} catch (error) {
+    document.getElementById('result').textContent = 'FAIL: ' + error.stack;
+}
+</script>
+</html>

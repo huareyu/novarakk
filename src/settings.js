@@ -72,6 +72,12 @@ export const defaultSettings = Object.freeze({
         medium: '',
         small: '',
     },
+    extBlocksPromptRoutingEnabled: false,
+    extBlocksPromptBindings: {
+        big: { styleId: '', prefixId: '', suffixId: '' },
+        medium: { styleId: '', prefixId: '', suffixId: '' },
+        small: { styleId: '', prefixId: '', suffixId: '' },
+    },
     censorOnGenerate: false,
     prettyErrorImages: false,
     imageActionPosition: 'top-right',
@@ -84,7 +90,7 @@ export const defaultSettings = Object.freeze({
     suffixes: [],
     activeSuffixId: '',
     styleTags: ['GPT', 'Nano Banana', 'NovelAI', 'character', 'girl', 'boy', 'lighting'],
-    apiType: 'openai', // 'openai' | 'gemini' | 'openrouter' | 'electronhub' | 'naistera' | 'void' | 'aigate' | 'novelai'
+    apiType: 'openai', // 'openai' | 'gemini' | 'openrouter' | 'electronhub' | 'naistera' | 'void' | 'novelai'
     endpoint: '',
     /**
      * Если true — endpoint используется «как есть» для генерации (никаких
@@ -284,26 +290,30 @@ export const CONNECTION_FIELDS = Object.freeze([
     'novelaiReferenceFidelity',
 ]);
 
-const REMOVED_PROBLEMBO_FIELDS = Object.freeze([
+const REMOVED_PROVIDER_IDS = new Set(['problembo', 'wellflow', 'aigate']);
+const REMOVED_PROVIDER_FIELDS = Object.freeze([
     'problemboNegativePrompt',
     'problemboStyle',
     'problemboSeed',
     'problemboAspectRatio',
     'problemboResolution',
     'problemboEnableReferences',
+    'wellflowSize',
+    'wellflowUseProxy',
 ]);
 
-/** Удаляет настройки и профили снятого с поддержки провайдера Problembo. */
+// Remove retired provider connections without touching wardrobe or reference data.
 export function migrateRemovedProviders(settings = getSettings()) {
     let changed = false;
     const profiles = Array.isArray(settings.connectionProfiles) ? settings.connectionProfiles : [];
-    const remainingProfiles = profiles.filter(profile => profile?.apiType !== 'problembo');
+    const removedIds = new Set(profiles.filter(profile => REMOVED_PROVIDER_IDS.has(profile?.apiType)).map(profile => profile.id));
+    const remainingProfiles = profiles.filter(profile => !REMOVED_PROVIDER_IDS.has(profile?.apiType));
     if (remainingProfiles.length !== profiles.length) {
         settings.connectionProfiles = remainingProfiles;
         changed = true;
     }
 
-    if (settings.apiType === 'problembo') {
+    if (REMOVED_PROVIDER_IDS.has(settings.apiType)) {
         const fallback = remainingProfiles.find(profile => profile.id === settings.activeConnectionProfileId)
             || remainingProfiles[0]
             || null;
@@ -320,17 +330,30 @@ export function migrateRemovedProviders(settings = getSettings()) {
         }
         changed = true;
     } else if (!remainingProfiles.some(profile => profile.id === settings.activeConnectionProfileId)) {
-        settings.activeConnectionProfileId = remainingProfiles[0]?.id || '';
+        const nextId = remainingProfiles[0]?.id || '';
+        if (settings.activeConnectionProfileId !== nextId) changed = true;
+        settings.activeConnectionProfileId = nextId;
     }
 
-    for (const field of REMOVED_PROBLEMBO_FIELDS) {
+    for (const field of REMOVED_PROVIDER_FIELDS) {
         if (Object.hasOwn(settings, field)) {
             delete settings[field];
             changed = true;
         }
-        for (const profile of remainingProfiles) delete profile[field];
+        for (const profile of remainingProfiles) {
+            if (Object.hasOwn(profile, field)) {
+                delete profile[field];
+                changed = true;
+            }
+        }
     }
-    if (changed) iigLog('INFO', 'Removed obsolete Problembo provider settings and profiles');
+    for (const preset of ['big', 'medium', 'small']) {
+        if (removedIds.has(settings.extBlocksProfileBindings?.[preset])) {
+            settings.extBlocksProfileBindings[preset] = '';
+            changed = true;
+        }
+    }
+    if (changed) iigLog('INFO', 'Cleaned up retired provider connections');
     return changed;
 }
 
@@ -548,7 +571,6 @@ export const DEFAULT_ENDPOINTS = Object.freeze({
     openrouter: 'https://openrouter.ai/api/v1',
     electronhub: 'https://api.electronhub.ai',
     void: 'https://api.voidai.app',
-    aigate: 'https://api.aigate.shop',
 });
 
 export const ENDPOINT_PLACEHOLDERS = Object.freeze({
@@ -558,7 +580,6 @@ export const ENDPOINT_PLACEHOLDERS = Object.freeze({
     electronhub: 'https://api.electronhub.ai',
     naistera: 'https://naistera.org',
     void: 'https://api.voidai.app',
-    aigate: 'https://api.aigate.shop',
 });
 
 // ----- Settings accessors -----
@@ -601,10 +622,20 @@ export function getSettings() {
         medium: String(rawExtBlocksBindings?.medium || ''),
         small: String(rawExtBlocksBindings?.small || ''),
     };
+    settings.extBlocksPromptBindings = normalizeExtBlocksPromptBindings(settings.extBlocksPromptBindings);
 
     migrateNovelaiPresetsFormat(settings);
 
     return settings;
+}
+
+// Empty means active; __none__ disables the extension preset for that component.
+export function normalizeExtBlocksPromptBindings(raw) {
+    return Object.fromEntries(['big', 'medium', 'small'].map(preset => [preset,
+        Object.fromEntries(['styleId', 'prefixId', 'suffixId'].map(key => [key,
+            typeof raw?.[preset]?.[key] === 'string' ? raw[preset][key].trim() : '',
+        ])),
+    ]));
 }
 export function saveSettings() {
     const context = SillyTavern.getContext();
@@ -795,7 +826,6 @@ export function normalizeConfiguredEndpoint(apiType, endpoint) {
         if (apiType === 'void') return DEFAULT_ENDPOINTS.void;
         if (apiType === 'openrouter') return DEFAULT_ENDPOINTS.openrouter;
         if (apiType === 'electronhub') return DEFAULT_ENDPOINTS.electronhub;
-        if (apiType === 'aigate') return DEFAULT_ENDPOINTS.aigate;
         return '';
     }
     if (apiType === 'naistera') {

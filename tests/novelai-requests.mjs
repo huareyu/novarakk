@@ -45,6 +45,7 @@ await rules.evaluate();
 const stubs = {
     getSettings: () => globalSettings,
     renderParameterHelp,
+    buildExtBlocksPromptRoutingHtml: () => '',
     sanitizeForHtml: value => String(value ?? ''),
     ensureConnectionProfiles: () => [],
     ensureNovelaiNegativePresets: () => [],

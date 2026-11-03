@@ -5,6 +5,29 @@ import {
 } from './settings.js';
 
 export const EXT_BLOCKS_PRESETS = Object.freeze(['big', 'medium', 'small']);
+export const EXT_BLOCKS_NO_PRESET = '__none__';
+
+// Request-local active IDs: concurrent block generations never change the global selection.
+export function buildExtBlocksPromptSettings(preset, settings) {
+    if (!settings.extBlocksPromptRoutingEnabled || !EXT_BLOCKS_PRESETS.includes(preset)) return settings;
+    const bindings = settings.extBlocksPromptBindings?.[preset] || {};
+    const overrides = {};
+    for (const [key, collection, activeKey] of [
+        ['styleId', 'styles', 'activeStyleId'],
+        ['prefixId', 'prefixes', 'activePrefixId'],
+        ['suffixId', 'suffixes', 'activeSuffixId'],
+    ]) {
+        const selected = String(bindings[key] || '').trim();
+        if (!selected) continue;
+        if (selected === EXT_BLOCKS_NO_PRESET) overrides[activeKey] = '';
+        else if (Array.isArray(settings[collection]) && settings[collection].some(item => item?.id === selected)) {
+            overrides[activeKey] = selected;
+        } else {
+            iigLog('WARN', `ExtBlocks prompt route uses active preset: preset=${preset}, missing ${key}=${selected}`);
+        }
+    }
+    return Object.keys(overrides).length ? { ...settings, ...overrides } : settings;
+}
 
 function escapeRegExp(value) {
     return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -72,6 +95,7 @@ function tagBelongsToBlock(blockText, tag) {
 export function getExtBlocksPresetForTag(message, tag, context = SillyTavern.getContext()) {
     const extblocksText = String(message?.extra?.extblocks || '');
     if (!extblocksText || !tag) return null;
+    if (tag.sourceKey === 'mes') return null;
 
     // display_text contains message.mes too. Requiring a match in extblocks
     // prevents normal chat images from accidentally entering preset routing.
@@ -85,6 +109,10 @@ export function getExtBlocksPresetForTag(message, tag, context = SillyTavern.get
         ? String(message?.extra?.display_text || '')
         : extblocksText;
     const tagIndex = Number(tag.index);
+    if (tag.sourceKey === 'display_text' && Number.isFinite(tagIndex) && tagIndex >= 0) {
+        const externalStart = indexedSource.lastIndexOf(extblocksText);
+        if (externalStart >= 0 && (tagIndex < externalStart || tagIndex >= externalStart + extblocksText.length)) return null;
+    }
 
     // Prefer the parser's exact character offset. This disambiguates two
     // blocks that happen to contain byte-identical image tags.
@@ -121,25 +149,26 @@ export function getExtBlocksPresetForTag(message, tag, context = SillyTavern.get
 }
 
 /**
- * Resolves a per-generation profile override for an image inside ExtBlocks.
- * Returns null when routing is disabled, the tag is not external, or the
- * corresponding preset intentionally uses the active profile.
+ * Resolve independent connection and prompt overrides for an external image.
+ * Normal chat images and disabled routes retain the existing global behavior.
  */
 export function resolveExtBlocksImageRoute(message, tag, settings, context = SillyTavern.getContext()) {
-    if (!settings?.externalBlocks || !settings.extBlocksProfileRoutingEnabled) return null;
+    if (!settings?.externalBlocks || !(settings.extBlocksProfileRoutingEnabled || settings.extBlocksPromptRoutingEnabled)) return null;
     const preset = getExtBlocksPresetForTag(message, tag, context);
     if (!preset) return null;
 
-    const profileId = String(settings.extBlocksProfileBindings?.[preset] || '').trim();
-    if (!profileId) return { preset, profile: null, providerSettings: settings };
+    const profileId = settings.extBlocksProfileRoutingEnabled
+        ? String(settings.extBlocksProfileBindings?.[preset] || '').trim() : '';
+    const withPrompts = providerSettings => buildExtBlocksPromptSettings(preset, providerSettings);
+    if (!profileId) return { preset, profile: null, providerSettings: withPrompts(settings) };
 
     const profile = ensureConnectionProfiles(settings).find(item => item.id === profileId);
     if (!profile) {
         iigLog('WARN', `ExtBlocks image route ignored: preset=${preset}, missing profile=${profileId}`);
-        return { preset, profile: null, providerSettings: settings };
+        return { preset, profile: null, providerSettings: withPrompts(settings) };
     }
 
-    const providerSettings = buildConnectionProfileSettings(profile.id, settings);
+    const providerSettings = withPrompts(buildConnectionProfileSettings(profile.id, settings));
     iigLog(
         'INFO',
         `ExtBlocks image route: preset=${preset}, profile=${profile.name}, provider=${profile.apiType}, model=${profile.model || profile.naisteraModel || profile.novelaiModel || '(default)'}`,

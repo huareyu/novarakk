@@ -61,6 +61,45 @@
 }
 
 /* Settings Panel */
+/* Native regeneration dialog: content scrolls, header and actions remain reachable. */
+dialog.iig-regen-dialog {
+    position: fixed;
+    inset: calc(var(--iig-regen-top, 0px) + 12px) 0 auto;
+    width: min(600px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+    max-height: calc(var(--iig-regen-height, 100dvh) - 24px);
+    height: auto;
+    margin: 0 auto;
+    padding: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    border: 1px solid var(--SmartThemeBorderColor, #555);
+    border-radius: 12px;
+    background: var(--SmartThemeBlurTintColor, #202020);
+    color: var(--SmartThemeBodyColor, #eee);
+    box-shadow: 0 12px 50px #0009;
+    text-align: left;
+}
+dialog.iig-regen-dialog[open] { display: flex; flex-direction: column; }
+.iig-regen-dialog::backdrop { background: #0009; }
+.iig-regen-header, .iig-regen-footer { display: flex; align-items: center; gap: 8px; padding: 10px 12px; flex: 0 0 auto; }
+.iig-regen-header { justify-content: space-between; border-bottom: 1px solid var(--SmartThemeBorderColor, #444); }
+.iig-regen-footer { justify-content: flex-end; border-top: 1px solid var(--SmartThemeBorderColor, #444); }
+.iig-regen-body { display: flex; flex-direction: column; gap: 12px; padding: 12px; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.iig-regen-dialog button { font: inherit; color: inherit; background: #ffffff08; border: 1px solid var(--SmartThemeBorderColor, #555); border-radius: 8px; min-height: 44px; padding: 8px 12px; cursor: pointer; }
+.iig-regen-dialog button:hover, .iig-regen-dialog button:focus-visible { background: #ffffff18; }
+.iig-regen-header button { flex: 0 0 44px; font-size: 24px; padding: 0; }
+.iig-regen-choice { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; }
+.iig-regen-picker, .iig-regen-prompt-label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.iig-regen-picker[hidden] { display: none; }
+.iig-regen-dialog select, .iig-regen-dialog textarea { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; margin: 0; color: inherit; background: #0003; border: 1px solid var(--SmartThemeBorderColor, #555); border-radius: 6px; font: inherit; padding: 8px; }
+.iig-regen-dialog select { min-height: 44px; }
+.iig-regen-dialog textarea { min-height: 120px; resize: vertical; white-space: pre-wrap; line-height: 1.5; }
+.iig-regen-dialog .hint { margin: 0; font-size: 0.85em; line-height: 1.4; opacity: 0.75; }
+.iig-regen-footer .iig-regen-submit { border-color: var(--SmartThemeQuoteColor, #9a8); }
+.iig-regen-remember { display: flex; align-items: center; gap: 8px; min-height: 36px; cursor: pointer; }
+.iig-regen-remember input { flex: 0 0 auto; margin: 0; }
+
 /* Compact, naturally scrolling per-block prompt cards; no fixed-height nested scroller. */
 .iig-extblocks-prompt-cards {
     display: grid;

@@ -10,7 +10,7 @@
 
 import { t } from './i18n.js';
 import { downloadImageSrc, isErrorImageSrc } from './utils.js';
-import { regenerateSingleTag } from './pipeline.js';
+import { openRegenerationMenu } from './regenerationMenu.js';
 import { getSettings } from './settings.js';
 
 const IMG_SELECTOR = 'img[data-iig-instruction]';
@@ -239,5 +239,5 @@ async function regenerateOne(img) {
     if (tagIndex < 0) return;
 
     const instruction = img.getAttribute('data-iig-instruction') || '';
-    await regenerateSingleTag(messageId, tagIndex, instruction);
+    await openRegenerationMenu({ messageId, tagIndex, instructionValue: instruction });
 }

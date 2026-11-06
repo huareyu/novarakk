@@ -551,6 +551,11 @@ export function buildApiSettingsSectionHtml(settings = getSettings()) {
 
             <div class="iig-settings-card-nested iig-api-display-options">
                 <h4>${t`Generated image display`}</h4>
+                <label class="checkbox_label">
+                    <input type="checkbox" id="iig_show_regeneration_menu" ${settings.showRegenerationMenu !== false ? 'checked' : ''}>
+                    <span>${t`Offer a choice when regenerating images`}</span>
+                </label>
+                <p class="hint">${t`Choose between regenerating the image and editing its prompt. If disabled, the regeneration button starts generation immediately without editing.`}</p>
                 <div class="flex-row">
                     <label for="iig_image_action_position">${t`Image button corner`}</label>
                     <select id="iig_image_action_position" class="flex1">
@@ -636,6 +641,7 @@ function applyProfileValuesToInputs(settings) {
     setChk('iig_censor_on_generate', settings.censorOnGenerate);
     setChk('iig_pretty_error_images', settings.prettyErrorImages);
     setVal('iig_image_action_position', settings.imageActionPosition || 'top-right');
+    setChk('iig_show_regeneration_menu', settings.showRegenerationMenu !== false);
     setVal('iig_api_key', settings.apiKey);
     setVal('iig_model', settings.model);
     // Select holds model too — add option on-the-fly if profile's model isn't
@@ -848,6 +854,10 @@ export function bindApiSectionEvents(settings, updateVisibility) {
             document.querySelectorAll('#chat .iig-img-host.iig-censored')
                 .forEach((host) => host.classList.remove('iig-censored'));
         }
+        saveSettings();
+    });
+    document.getElementById('iig_show_regeneration_menu')?.addEventListener('change', event => {
+        settings.showRegenerationMenu = event.target.checked;
         saveSettings();
     });
 

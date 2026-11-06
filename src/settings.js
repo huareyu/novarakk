@@ -81,6 +81,7 @@ export const defaultSettings = Object.freeze({
     censorOnGenerate: false,
     prettyErrorImages: false,
     imageActionPosition: 'top-right',
+    showRegenerationMenu: true,
     imageContextEnabled: false,
     imageContextCount: 1,
     styles: [],

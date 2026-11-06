@@ -3,7 +3,8 @@
  */
 
 import { getSettings, iigLog } from './settings.js';
-import { processMessageTags, regenerateMessageImages } from './pipeline.js';
+import { processMessageTags } from './pipeline.js';
+import { openRegenerationMenu } from './regenerationMenu.js';
 import { t } from './i18n.js';
 
 // ----- Regenerate button (three-dots menu) -----
@@ -20,9 +21,13 @@ export function addRegenerateButton(messageElement, messageId) {
     btn.className = 'mes_button iig-regenerate-btn fa-solid fa-images interactable';
     btn.title = t`Regenerate images`;
     btn.tabIndex = 0;
+    btn.setAttribute('role', 'button');
     btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        await regenerateMessageImages(messageId);
+        await openRegenerationMenu({ messageId });
+    });
+    btn.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); btn.click(); }
     });
 
     extraMesButtons.appendChild(btn);

@@ -5,6 +5,8 @@ import vm from 'node:vm';
 const root = new URL('../', import.meta.url);
 const tag = (parts, ...values) => parts.reduce((out, part, i) => out + part + (values[i] ?? ''), '');
 const records = [], failures = [];
+const replacements = [];
+let forceFailure = false;
 let tags = [], media = [];
 class Node {
     dataset = {}; style = {}; attrs = {}; isConnected = true;
@@ -30,9 +32,12 @@ const context = vm.createContext({ structuredClone, AbortController, DOMExceptio
     toastr: { info() {}, success() {}, warning() {}, error(...args) { failures.push(args); } },
 });
 const stubs = {
+    ProviderError: class extends Error {},
     t: tag, buildExtraPromptBlocks: () => [], checkFileExists: async () => false,
-    sanitizeForHtml: value => String(value ?? ''), sanitizeForSingleQuotedAttribute: value => String(value ?? ''),
-    normalizeStoredImagePath: value => value, decodeHtmlEntities: value => value, isErrorImageSrc: () => false,
+    sanitizeForHtml: value => String(value ?? ''), sanitizeForSingleQuotedAttribute: value => String(value ?? '')
+        .replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+    normalizeStoredImagePath: value => value, decodeHtmlEntities: value => String(value ?? '')
+        .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'), isErrorImageSrc: () => false,
     saveImageToFile: async () => '/user/images/test.png',
     parseImageDataUrl: () => ({ mimeType: 'image/png', subtype: 'png', base64Data: 'FAKE' }),
     buildActiveCharacterLibraryPromptBlock: async () => '', getReferenceImage: ref => ref,
@@ -41,6 +46,7 @@ const stubs = {
         collectReferences: async () => [],
         async generate({ prompt, style, options }) {
             await Promise.resolve();
+            if (forceFailure) throw new Error('TEST generation failure');
             const settings = options.providerSettings || settingsModule.namespace.getSettings();
             records.push({ prompt: parser.namespace.buildFinalGenerationPrompt(prompt, style, [], settings,
                 { includeReferencePromptBlocks: false }), apiType: settings.apiType, model: settings.model,
@@ -78,6 +84,8 @@ await load('src/matching.js');
 const parser = await load('src/parser.js');
 const routing = await load('src/extBlocksIntegration.js');
 const s = settingsModule.namespace.getSettings();
+assert.equal(s.showRegenerationMenu, true, 'existing installations keep the menu by default');
+assert.ok(!settingsModule.namespace.CONNECTION_FIELDS.includes('showRegenerationMenu'), 'display preference is shared across profiles');
 const item = (id, value = id) => ({ id, name: id, value, tags: [] });
 Object.assign(s, { externalBlocks: true, extBlocksPromptRoutingEnabled: true,
     styles: [item('global-style'), item('big-style'), item('small-style')], activeStyleId: 'global-style',
@@ -144,14 +152,14 @@ assert.ok(!settingsModule.namespace.CONNECTION_FIELDS.includes('extBlocksPromptB
 
 const pipelineParser = { ...parser.namespace, parseMessageImageTags: async () => structuredClone(tags),
     convertLegacyTagsToInstructionFormat: () => 0, getMatchedAdditionalReferences: () => [],
-    createGeneratedMediaElement: () => new Node(), getInstructionAttributeValue: () => '{}',
-    isGeneratedVideoResult: () => false, buildPersistedMediaTag: () => '<img src="/result.png">',
-    replaceTagInMessageSource() {}, rerenderMessageHtml() {},
+    createGeneratedMediaElement: () => new Node(), getInstructionAttributeValue: parser.namespace.getInstructionAttributeValue,
+    isGeneratedVideoResult: () => false, buildPersistedMediaTag: parser.namespace.buildPersistedMediaTag,
+    replaceTagInMessageSource(message, original, replacement) { replacements.push({ original: original.fullMatch, replacement }); }, rerenderMessageHtml() {},
 };
 const pipeline = await load('src/pipeline.js', true);
 app.chat = [message];
 function reset() {
-    tags = makeTags(); records.length = 0; failures.length = 0;
+    tags = makeTags(); records.length = 0; failures.length = 0; replacements.length = 0;
     media = tags.map(() => { const node = new Node(); node.parentElement = mesText; return node; });
 }
 const expected = ['[STYLE: big-style]\n\nbig-prefix a red apple big-suffix',
@@ -183,3 +191,46 @@ await pipeline.namespace.processMessageTags(0);
 assert.equal(failures.length, 0, JSON.stringify(failures));
 assert.equal(records[0].prompt, '[STYLE: global-style]\n\nglobal-prefix a red apple global-suffix');
 console.log('PASS: three preset routes, independent toggles, combined profiles, normal-chat isolation, missing/deleted choices, tag style, concurrent generation, single/all regeneration, unchanged global selections');
+
+reset();
+const editedPrompt = `Zach's "new" outfit <b>green</b> & gold\nsecond line $&`;
+const originalMarkup = tags[1].fullMatch;
+await pipeline.namespace.regenerateSingleTag(0, 1, '', { prompt: editedPrompt });
+assert.equal(failures.length, 0, JSON.stringify(failures));
+assert.ok(records[0].prompt.includes(editedPrompt));
+assert.equal(replacements.length, 1);
+assert.equal(replacements[0].original, originalMarkup, 'replace the source tag, not the edited markup');
+const persisted = parser.namespace.getInstructionAttributeValue({ isNewFormat: true, fullMatch: replacements[0].replacement });
+assert.equal(parser.namespace.parseInstructionObject(persisted).prompt, editedPrompt);
+assert.ok(replacements[0].replacement.includes('src="/user/images/test.png"'));
+assert.equal(parser.namespace.parseInstructionObject(media[1].getAttribute('data-iig-instruction')).prompt, editedPrompt);
+reset(); forceFailure = true;
+await pipeline.namespace.regenerateSingleTag(0, 1, '', { prompt: 'failed draft' });
+assert.equal(replacements.length, 0, 'failed generation must not persist the draft');
+forceFailure = false; reset();
+await pipeline.namespace.regenerateSingleTag(0, 1, '', { prompt: '   ' });
+assert.equal(records.length, 0); assert.equal(replacements.length, 0);
+reset();
+await pipeline.namespace.regenerateSingleTag(0, 1, '', { prompt: 'works after failure' });
+assert.equal(records.length, 1, 'failed attempts release the generation lock');
+const details = { prompt: 'old', style: 'fixed', aspect_ratio: '2:3', image_size: '2K', quality: 'high', custom: { keep: true } };
+const fullMatch = `<img data-iig-instruction='${JSON.stringify(details)}' src="/old.png">`;
+const original = { ...makeTags()[0], fullMatch };
+const changed = parser.namespace.buildEditedPromptTag(original, editedPrompt);
+const savedDetails = parser.namespace.parseInstructionObject(parser.namespace.getInstructionAttributeValue(changed));
+assert.equal(savedDetails.style, 'fixed'); assert.equal(savedDetails.aspect_ratio, '2:3');
+assert.equal(savedDetails.image_size, '2K'); assert.equal(savedDetails.custom.keep, true);
+assert.equal(original.fullMatch, fullMatch);
+assert.equal(pipeline.namespace.findTagIndexByInstruction([{ prompt: 'same' }, { prompt: 'same' }], '{"prompt":"same"}', 1), 1);
+for (const sourceKey of ['mes', 'extblocks', 'display_text']) {
+    const swipeMessage = { mes: 'OLD', extra: { display_text: 'OLD', extblocks: 'OLD' }, swipe_id: 1,
+        swipes: ['OLD', 'OLD'], swipe_info: [{ extra: { display_text: 'OLD', extblocks: 'OLD' } },
+            { extra: { display_text: 'OLD', extblocks: 'OLD' } }] };
+    parser.namespace.replaceTagInMessageSource(swipeMessage, { sourceKey, fullMatch: 'OLD' }, 'NEW');
+    assert.equal(swipeMessage.swipes[0], 'OLD');
+    assert.equal(swipeMessage.swipe_info[0].extra.display_text, 'OLD');
+    assert.equal(swipeMessage.swipes[1], sourceKey === 'extblocks' ? 'OLD' : 'NEW');
+    assert.equal(swipeMessage.swipe_info[1].extra.display_text, 'NEW');
+    assert.equal(swipeMessage.swipe_info[1].extra.extblocks, sourceKey === 'mes' ? 'OLD' : 'NEW');
+}
+console.log('PASS: edited prompt request/persistence, original-source replacement, escaped quotes/HTML, unchanged parameters, no persistence on failure/empty input, released locks and duplicate-tag targeting');

@@ -1,0 +1,63 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="../style.css"><style>body{background:#282828;color:#ddd;font:16px sans-serif}#result{white-space:pre-wrap;font-size:11px}</style>
+<button id="trigger">Regenerate</button><pre id="result">RUNNING</pre>
+<script type="module">
+import { showRegenerationDialog } from '../src/regenerationUi.js';
+const check = (value, message) => { if (!value) throw new Error(message); };
+const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+const entries = [{ index: 0, prompt: `Zach's old outfit <img id="injected" src=x>` }, { index: 1, prompt: 'Second image prompt' }];
+const results = [], errors = [];
+const open = () => showRegenerationDialog({ entries, onGenerate: value => results.push(value), onError: value => errors.push(value) });
+try {
+    document.getElementById('trigger').focus();
+    let dialog = open();
+    const width = Number(new URLSearchParams(location.search).get('panelWidth')) || innerWidth;
+    dialog.style.width = `${Math.min(600, width - 24)}px`;
+    check(dialog.open && dialog.matches(':modal'), 'native dialog in top layer');
+    check(dialog.textContent.includes('Переписать промпт'), 'translated action menu');
+    check(dialog.querySelectorAll('.iig-regen-choice').length === 2, 'two choices');
+    check(!dialog.querySelector('[data-regen-remember]').checked, 'dont-ask unchecked by default');
+    dialog.querySelector('[data-regen-remember]').click();
+    dialog.querySelector('[data-regen-edit]').click();
+    dialog.querySelector('[data-regen-back]').click();
+    check(dialog.querySelector('[data-regen-remember]').checked, 'dont-ask draft survives returning from editor');
+    dialog.querySelector('[data-regen-edit]').click();
+    check(dialog.querySelector('textarea').value === entries[0].prompt, 'original prompt loaded');
+    check(!document.getElementById('injected'), 'prompt displayed as text, not HTML');
+    const draft = 'Edited first prompt'; dialog.querySelector('textarea').value = draft;
+    const select = dialog.querySelector('select'); select.value = '1'; select.dispatchEvent(new Event('change'));
+    check(dialog.querySelector('textarea').value === entries[1].prompt, 'choose second image');
+    const select2 = dialog.querySelector('select'); select2.value = '0'; select2.dispatchEvent(new Event('change'));
+    check(dialog.querySelector('textarea').value === draft, 'per-image drafts retained');
+    dialog.querySelector('textarea').value = '   '; dialog.querySelector('[data-regen-submit]').click();
+    check(dialog.open && !results.length, 'empty prompt must not generate');
+    dialog.querySelector('textarea').value = draft;
+    dialog.querySelector('[data-regen-submit]').click(); await tick();
+    check(results.length === 1 && results[0].edited && results[0].prompt === draft, 'edited action callback');
+    check(results[0].dontAskAgain, 'remember choice submitted with successful action');
+    check(!document.querySelector('dialog'), 'closed after generate');
+    dialog = open(); dialog.querySelector('[data-regen-run]').click(); await tick();
+    check(results.length === 2 && !results[1].edited, 'plain regeneration unchanged');
+    check(!results[1].dontAskAgain, 'unchecked choice not remembered');
+    dialog = open(); dialog.querySelector('[data-regen-remember]').click();
+    dialog.dispatchEvent(new Event('cancel', { cancelable: true })); await tick();
+    check(!dialog.isConnected && results.length === 2, 'Escape cancels without generation');
+    dialog = open();
+    dialog.querySelector('[data-regen-edit]').click();
+    dialog.querySelector('[data-regen-back]').click();
+    check(dialog.querySelector('[data-regen-run]'), 'back returns to choices');
+    dialog.querySelector('[data-regen-close]').click(); await tick();
+    check(document.activeElement.id === 'trigger', 'focus restored');
+    dialog = open(); dialog.style.width = `${Math.min(600, width - 24)}px`;
+    dialog.querySelector('[data-regen-edit]').click();
+    dialog.style.setProperty('--iig-regen-height', '360px');
+    await tick();
+    const rect = dialog.getBoundingClientRect(), footer = dialog.querySelector('footer').getBoundingClientRect();
+    check(rect.width <= width - 20 && rect.left >= 0 && rect.right <= innerWidth + 1, 'fits mobile width');
+    check(rect.top >= 0 && rect.bottom <= 360, 'fits keyboard-reduced viewport');
+    check(footer.bottom <= rect.bottom + 1, 'actions remain reachable');
+    dialog.querySelector('[data-regen-close]').click(); await tick();
+    check(!errors.length, 'no UI errors');
+    document.getElementById('result').textContent = 'PASS: menu, edit/plain generation, image selection, drafts, empty-input validation, Escape/close/back, focus restoration, escaping and mobile/keyboard layout';
+} catch(error) { document.getElementById('result').textContent = 'FAIL: ' + error.stack; }
+</script></html>

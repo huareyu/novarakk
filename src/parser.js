@@ -69,6 +69,19 @@ export async function parseMessageImageTags(message, options = {}) {
 
 export function replaceTagInMessageSource(message, tag, replacement) {
     if (!message || !tag) return;
+    // Update only the active swipe; editing one image must not revert after swiping away.
+    const activeSwipe = message.swipe_id;
+    if (activeSwipe !== undefined && activeSwipe !== null) {
+        if (tag.sourceKey !== 'extblocks' && typeof message.swipes?.[activeSwipe] === 'string') {
+            message.swipes[activeSwipe] = message.swipes[activeSwipe].replace(tag.fullMatch, replacement);
+        }
+        const extra = message.swipe_info?.[activeSwipe]?.extra;
+        if (extra) {
+            for (const key of tag.sourceKey === 'mes' ? ['display_text'] : ['display_text', 'extblocks']) {
+                if (typeof extra[key] === 'string') extra[key] = extra[key].replace(tag.fullMatch, replacement);
+            }
+        }
+    }
 
     if (tag.sourceKey === 'display_text') {
         if (!message.extra) message.extra = {};
@@ -78,15 +91,6 @@ export function replaceTagInMessageSource(message, tag, replacement) {
         if (message.mes) message.mes = message.mes.replace(tag.fullMatch, replacement);
         if (message.extra.extblocks) message.extra.extblocks = message.extra.extblocks.replace(tag.fullMatch, replacement);
 
-        const swipeId = message.swipe_id;
-        if (swipeId !== undefined) {
-            if (Array.isArray(message.swipes) && typeof message.swipes[swipeId] === 'string') {
-                message.swipes[swipeId] = message.swipes[swipeId].replace(tag.fullMatch, replacement);
-            }
-            const swipeExtra = message.swipe_info?.[swipeId]?.extra;
-            if (swipeExtra?.display_text) swipeExtra.display_text = swipeExtra.display_text.replace(tag.fullMatch, replacement);
-            if (swipeExtra?.extblocks) swipeExtra.extblocks = swipeExtra.extblocks.replace(tag.fullMatch, replacement);
-        }
         return;
     }
 
@@ -470,6 +474,17 @@ export function getInstructionAttributeValue(tag) {
     }
 
     return JSON.stringify(buildInstructionData(tag));
+}
+
+// Return an edited copy; the source tag is retained separately until generation succeeds.
+export function buildEditedPromptTag(tag, prompt) {
+    if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('Image prompt must not be empty');
+    const data = { ...buildInstructionData(tag), ...parseInstructionObject(getInstructionAttributeValue(tag)), prompt: prompt.trim() };
+    const attribute = sanitizeForSingleQuotedAttribute(JSON.stringify(data));
+    const fullMatch = tag.isNewFormat
+        ? tag.fullMatch.replace(/data-iig-instruction\s*=\s*(['"])[\s\S]*?\1/i, () => `data-iig-instruction='${attribute}'`)
+        : `<img data-iig-instruction='${attribute}' src="[IMG:GEN]">`;
+    return { ...tag, prompt: data.prompt, fullMatch, isNewFormat: true };
 }
 
 export function isGeneratedVideoResult(value) {

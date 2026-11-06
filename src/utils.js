@@ -333,6 +333,8 @@ export function decodeHtmlEntities(text) {
         .replace(/&apos;/g, "'")
         .replace(/&#39;/g, "'")
         .replace(/&#34;/g, '"')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
         .replace(/&amp;/g, '&');
 }
 

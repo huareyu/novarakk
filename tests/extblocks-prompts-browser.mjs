@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const run = promisify(execFile);
+const fixture = process.argv[2] || 'extblocks-prompts.html';
+if (!/^[a-z0-9-]+\.html$/.test(fixture)) throw new Error('Invalid fixture name');
 const root = fileURLToPath(new URL('../', import.meta.url));
 const translations = JSON.parse(await readFile(new URL('../i18n/ru-ru.json', import.meta.url), 'utf8'));
 let browser;
@@ -35,7 +37,7 @@ try {
         const profile = await mkdtemp(join(tmpdir(), 'iig-extblocks-test-'));
         const { stdout } = await run(browser, ['--headless', '--disable-gpu', '--no-first-run', '--disable-extensions',
             `--user-data-dir=${profile}`, `--window-size=${size}`, '--virtual-time-budget=1500', '--dump-dom',
-            `http://127.0.0.1:${server.address().port}/tests/extblocks-prompts.html?panelWidth=${size.split(',')[0]}`],
+            `http://127.0.0.1:${server.address().port}/tests/${fixture}?panelWidth=${size.split(',')[0]}`],
         { windowsHide: true, timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
         const result = stdout.match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
         if (!result?.startsWith('PASS:')) throw new Error(`${size}: ${result || 'missing browser result'}`);
